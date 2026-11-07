@@ -14,6 +14,15 @@ from .events import EventLog, Recorder
 from .server import build_app
 
 
+def _guess_lan_url(settings) -> str:
+    """Same host as the DSM address, this server's port (usually right on a NAS)."""
+    from urllib.parse import urlparse
+    host = urlparse(settings.dsm_url).hostname
+    if not host or host in ("127.0.0.1", "localhost"):
+        return ""
+    return f"http://{host}:{os.environ.get('NASMCP_PORT', '8790')}"
+
+
 def main() -> None:
     logging.basicConfig(level=os.environ.get("NASMCP_LOG_LEVEL", "INFO"),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -58,7 +67,7 @@ def main() -> None:
                     tag=f"nasmcp-act-{a.id}")
             # Computer: Home Assistant's notification panel, links via the home address.
             base_pub = settings.public_url.rstrip("/")
-            base_lan = (settings.lan_url or settings.public_url).rstrip("/")
+            base_lan = (settings.lan_url or _guess_lan_url(settings) or settings.public_url).rstrip("/")
             lan_yes, lan_no = approve.replace(base_pub, base_lan), deny.replace(base_pub, base_lan)
             _n.ha_panel(settings, title, f"{a.what}\n\n**[{yes}]({lan_yes})** · [{no}]({lan_no})",
                         f"nasmcp_act_{a.id}")
