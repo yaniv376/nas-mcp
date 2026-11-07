@@ -196,3 +196,10 @@ def test_approval_page_route(nas, tmp_path):  # noqa: F811
     srv.should_exit = True
     th.join(5)
     assert result["ok"] is True
+
+
+def test_own_projects_blocked(nas, tmp_path):  # noqa: F811
+    ch, *_ = _writer_nas(nas, tmp_path)
+    for n in ("nas-mcp", "nas-gate"):
+        with pytest.raises(w.WriteDenied):
+            ch.project(n, "stop")

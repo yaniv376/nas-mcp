@@ -295,6 +295,9 @@ class Changes:
             return w.list_projects(dsm)
 
     def project(self, name: str, action: str) -> dict:
+        if name in ("nas-mcp", "nas-gate"):
+            raise w.WriteDenied(f"The '{name}' project runs this server or its gate; "
+                                "change it in Container Manager yourself.")
         def run():
             with self.nas._dsm_factory() as dsm:
                 p = w.find_project(dsm, name)
