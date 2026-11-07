@@ -188,3 +188,9 @@ def test_no_auth_only_when_running_and_retired_skipped(nas):
     assert not any(f.code == "no_auth" for f in diagnose(fakes.CONTAINERS[1], insp, ""))
     insp["Name"] = "/_to_delete_rclone"
     assert diagnose(fakes.CONTAINERS[1], insp, "") == []
+
+
+def test_retired_names():
+    from nasmcp.diagnose import is_retired
+    assert is_retired("_to_delete_rclone") and is_retired("to_delete_watchtower")
+    assert is_retired("todeletewatchtower") and not is_retired("watchtower")

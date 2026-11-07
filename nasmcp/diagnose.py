@@ -125,6 +125,13 @@ def image_tag(image: str) -> str:
     return last.split(":", 1)[1] if ":" in last else "latest"
 
 
+def is_retired(name: str) -> bool:
+    """Containers renamed for manual deletion. Docker names cannot start with
+    '_', so 'to_delete_x' and Portainer's 'todeletex' count too."""
+    n = name.lstrip("/_").lower().replace("-", "_")
+    return n.startswith(("to_delete", "todelete"))
+
+
 def repeated_errors(logs: str, min_count: int = 3) -> list[tuple[str, int]]:
     """Error lines that repeat (normalised for times and numbers)."""
     counts: Counter[str] = Counter()
@@ -174,7 +181,7 @@ def diagnose(container: dict, inspect: dict, logs: str = "",
     s = summarize(container, inspect)
     name = s["name"]
     out: list[Finding] = []
-    if name.startswith("_to_delete"):
+    if is_retired(name):
         return out  # retired on purpose, waiting for the owner to delete it
     state = s["state"]
     now = now or datetime.now().timestamp()
