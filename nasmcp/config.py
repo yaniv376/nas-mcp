@@ -111,6 +111,12 @@ DEFAULT_DOCKER_MOUNT = "/host/docker"
 # Optional: DSM's own Web API definition files (read-only), used to look up
 # which methods each DSM API offers before writing tools against it.
 DEFAULT_WEBAPI_MOUNT = "/host/webapi"
+# Further optional read-only mounts, picked up when present (name -> path).
+OPTIONAL_MOUNTS = {
+    "dsm_webapi": "/host/webapi",                 # /usr/syno/synoman/webapi
+    "dsm_ui": "/host/webman",                     # /usr/syno/synoman/webman
+    "container_manager": "/host/container-manager",  # /var/packages/ContainerManager/target
+}
 
 
 def _from_dict(raw: dict[str, Any]) -> Settings:
@@ -152,6 +158,7 @@ def load(path: Path | None = None) -> Settings:
     if "folders" not in raw:
         if Path(DEFAULT_DOCKER_MOUNT).is_dir():
             s.folders.append(Folder("docker", DEFAULT_DOCKER_MOUNT, "read"))
-        if Path(DEFAULT_WEBAPI_MOUNT).is_dir():
-            s.folders.append(Folder("dsm_webapi", DEFAULT_WEBAPI_MOUNT, "read"))
+        for name, path in OPTIONAL_MOUNTS.items():
+            if Path(path).is_dir():
+                s.folders.append(Folder(name, path, "read"))
     return s

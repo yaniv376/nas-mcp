@@ -140,3 +140,41 @@ def newest_file(path: str, pattern: str) -> dict | None:
     if not best:
         return None
     return {"file": best[0].name, "modified": best[1], "size_mb": round(best[2] / 1e6, 1)}
+
+
+def grep(settings: Settings, folder: str, pattern: str, path: str = "", glob: str = "*",
+         context: int = 160, max_hits: int = 40, max_file_mb: int = 25) -> dict:
+    """Regex search inside files of an allowed folder. Returns short snippets
+    around each hit (works on one-line minified files too)."""
+    import re
+    f = _folder(settings, folder)
+    root = _resolve(f, path)
+    try:
+        rx = re.compile(pattern)
+    except re.error as e:
+        raise AccessDenied(f"bad pattern: {e}") from e
+    base = Path(f.path).resolve()
+    hits: list[dict] = []
+    files_scanned = 0
+    targets = [root] if root.is_file() else None
+    walker = ([(str(root.parent), [], [root.name])] if targets else os.walk(root))
+    for dirpath, dirnames, filenames in walker:
+        dirnames[:] = [d for d in dirnames if not d.startswith(("@", "#recycle"))]
+        for name in filenames:
+            if not fnmatch.fnmatch(name, glob):
+                continue
+            full = Path(dirpath) / name
+            try:
+                if full.is_symlink() or _blocked(full) or full.stat().st_size > max_file_mb * 1_000_000:
+                    continue
+                text = full.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            files_scanned += 1
+            for m in rx.finditer(text):
+                a, b = max(0, m.start() - context), min(len(text), m.end() + context)
+                hits.append({"file": os.path.relpath(full, base),
+                             "snippet": redact(text[a:b]).replace("\n", " ")})
+                if len(hits) >= max_hits:
+                    return {"hits": hits, "truncated": True, "files_scanned": files_scanned}
+    return {"hits": hits, "truncated": False, "files_scanned": files_scanned}

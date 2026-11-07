@@ -172,6 +172,14 @@ def build_mcp(nas: NAS, provider=None) -> MCPServer:
         """Find files by name pattern (for example '*.yaml') inside an allowed folder."""
         return filesmod.search(s, folder, pattern, path)
 
+    @m.tool(annotations=RO)
+    @_safe
+    def files_grep(folder: str, pattern: str, path: str = "", glob: str = "*",
+                   max_hits: int = 40) -> dict:
+        """Regex search inside the files of an allowed folder (for example a log or
+        config, or DSM's own UI code to learn API parameters). Returns snippets."""
+        return filesmod.grep(s, folder, pattern, path, glob, max_hits=max(1, min(max_hits, 200)))
+
     return m
 
 

@@ -194,3 +194,11 @@ def test_retired_names():
     from nasmcp.diagnose import is_retired
     assert is_retired("_to_delete_rclone") and is_retired("to_delete_watchtower")
     assert is_retired("todeletewatchtower") and not is_retired("watchtower")
+
+
+def test_grep(nas):
+    r = files.grep(nas.s, "docker", r"image:\s*\S+", glob="*.yaml")
+    assert r["hits"] and "seerr" in r["hits"][0]["snippet"]
+    assert "hunter2" not in str(r)
+    with pytest.raises(files.AccessDenied):
+        files.grep(nas.s, "private", "x")
