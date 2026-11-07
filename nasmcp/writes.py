@@ -105,9 +105,10 @@ class Approvals:
     def __init__(self, public_url: str, send: Callable[[Approval, str, str], None] | None):
         self.public = public_url.rstrip("/")
         self.send = send
+        self.on_done: Callable[[Approval], None] | None = None
         self.items: dict[str, Approval] = {}
 
-    def ask(self, what: str, wait_seconds: int = 120, poll: float = 2.0) -> bool:
+    def ask(self, what: str, wait_seconds: int = 180, poll: float = 2.0) -> bool:
         if not self.send or not self.public:
             raise WriteDenied("This step needs approval on the phone, but notifications or "
                               "the public address are not configured.")
@@ -125,11 +126,16 @@ class Approvals:
                 break
             time.sleep(poll)
         self.items.pop(a.id, None)
+        if self.on_done:
+            try:
+                self.on_done(a)
+            except Exception:
+                pass
         if a.decision == "approved":
             return True
         if a.decision == "denied":
             raise WriteDenied("Denied on the phone.")
-        raise WriteDenied("No answer on the phone within 2 minutes; nothing was changed.")
+        raise WriteDenied("No answer within 3 minutes (phone or Home Assistant); nothing was changed.")
 
     def decide(self, aid: str, secret: str, action: str) -> str:
         a = self.items.get(aid)

@@ -16,6 +16,30 @@ class NotifyError(Exception):
     pass
 
 
+def ha_panel(settings: Settings, title: str, message: str, notification_id: str) -> None:
+    """Also show the request in Home Assistant's notification panel (bell icon),
+    so it can be answered from a computer. Best effort."""
+    if settings.notify_mode != "ha" or not (settings.ha_url and settings.ha_token):
+        return
+    try:
+        httpx.post(f"{settings.ha_url.rstrip('/')}/api/services/persistent_notification/create",
+                   json={"title": title, "message": message, "notification_id": notification_id},
+                   headers={"Authorization": f"Bearer {settings.ha_token}"}, timeout=15)
+    except httpx.HTTPError as e:
+        log.warning("HA panel notification failed: %s", e)
+
+
+def ha_panel_dismiss(settings: Settings, notification_id: str) -> None:
+    if settings.notify_mode != "ha" or not (settings.ha_url and settings.ha_token):
+        return
+    try:
+        httpx.post(f"{settings.ha_url.rstrip('/')}/api/services/persistent_notification/dismiss",
+                   json={"notification_id": notification_id},
+                   headers={"Authorization": f"Bearer {settings.ha_token}"}, timeout=15)
+    except httpx.HTTPError:
+        pass
+
+
 def send(settings: Settings, title: str, message: str,
          actions: list[dict[str, str]] | None = None, tag: str | None = None) -> None:
     """actions: [{"title": "Approve", "uri": "https://..."}] (opened on tap)."""

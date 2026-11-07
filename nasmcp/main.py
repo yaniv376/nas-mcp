@@ -50,11 +50,20 @@ def main() -> None:
         he = settings.language == "he"
 
         def ask_change(a, approve, deny):
-            _n.send(settings, "אישור פעולה ב-NAS" if he else "NAS change request", a.what,
-                    actions=[{"title": "אשר" if he else "Approve", "uri": approve},
-                             {"title": "דחה" if he else "Deny", "uri": deny}],
+            title = "אישור פעולה ב-NAS" if he else "NAS change request"
+            yes, no = ("אשר", "דחה") if he else ("Approve", "Deny")
+            # Phone: push with buttons (public address works away from home).
+            _n.send(settings, title, a.what, actions=[{"title": yes, "uri": approve},
+                                                      {"title": no, "uri": deny}],
                     tag=f"nasmcp-act-{a.id}")
+            # Computer: Home Assistant's notification panel, links via the home address.
+            base_pub = settings.public_url.rstrip("/")
+            base_lan = (settings.lan_url or settings.public_url).rstrip("/")
+            lan_yes, lan_no = approve.replace(base_pub, base_lan), deny.replace(base_pub, base_lan)
+            _n.ha_panel(settings, title, f"{a.what}\n\n**[{yes}]({lan_yes})** · [{no}]({lan_no})",
+                        f"nasmcp_act_{a.id}")
         nas.approvals.send = ask_change
+        nas.approvals.on_done = lambda a: _n.ha_panel_dismiss(settings, f"nasmcp_act_{a.id}")
     app, _ = build_app(nas, recorder, provider)
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("NASMCP_PORT", "8790")),
                 log_level="info", proxy_headers=True)

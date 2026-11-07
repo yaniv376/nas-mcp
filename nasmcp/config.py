@@ -64,6 +64,10 @@ class Settings:
     # for the owner to approve it from a phone notification.
     token: str = ""
     public_url: str = ""
+    # Home-network address of this server (e.g. http://192.168.1.10:8790). Approval
+    # links in Home Assistant's notification panel use it, so approving works from
+    # a computer at home too.
+    lan_url: str = ""
     access_token_hours: int = 8
     refresh_token_days: int = 90
 
@@ -100,6 +104,7 @@ _ENV = {
     "language": "NASMCP_LANGUAGE",
     "watchtower_container": "NASMCP_WATCHTOWER",
     "public_url": "NASMCP_PUBLIC_URL",
+    "lan_url": "NASMCP_LAN_URL",
     "notify_mode": "NASMCP_NOTIFY_MODE",
     "ha_url": "NASMCP_HA_URL",
     "ha_token": "NASMCP_HA_TOKEN",
