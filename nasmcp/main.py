@@ -45,6 +45,16 @@ def main() -> None:
             Store(config.DATA_DIR / "oauth.json"), settings.public_url, settings.token,
             notify=ask_phone, access_hours=settings.access_token_hours,
             refresh_days=settings.refresh_token_days)
+    if settings.public_url and settings.notify_mode != "none":
+        from . import notify as _n
+        he = settings.language == "he"
+
+        def ask_change(a, approve, deny):
+            _n.send(settings, "אישור פעולה ב-NAS" if he else "NAS change request", a.what,
+                    actions=[{"title": "אשר" if he else "Approve", "uri": approve},
+                             {"title": "דחה" if he else "Deny", "uri": deny}],
+                    tag=f"nasmcp-act-{a.id}")
+        nas.approvals.send = ask_change
     app, _ = build_app(nas, recorder, provider)
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("NASMCP_PORT", "8790")),
                 log_level="info", proxy_headers=True)

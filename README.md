@@ -5,7 +5,7 @@ disks and volumes, Docker containers (state, logs, diagnosis), Watchtower
 update history, backups, and the [NAS gate](https://github.com/yaniv376/nas-gate)
 security scan.
 
-**Read-only so far (stages 1a and 1b).** Nothing here can change the NAS:
+**Reads always; changes only while the NAS gate's "Agent (MCP)" window is open.** Nothing here can change the NAS:
 Docker is reached through a socket proxy with POST disabled, and mounted
 folders are read-only.
 
@@ -63,6 +63,21 @@ never in this repository.
 4. Claude registers itself and opens a page with a 4-digit code; your phone gets a
    notification with Approve / Deny buttons. Tokens are stored only as hashes,
    access tokens last 8 hours and rotate through refresh tokens.
+
+## Changes (stage 1c)
+
+| Tool | Does |
+| --- | --- |
+| `container_control` | start / stop / restart |
+| `container_set_auto_restart` | restart policy (unless-stopped by default) |
+| `container_retire` | stop, no auto-restart, rename `to_delete_<name>`; phone approval |
+| `compose_write` / `compose_restore` | edit a project's Compose file, validated, with backups |
+| `project_run` | Container Manager project stop / build / start / restart |
+| `projects_list`, `compose_backups`, `actions_log` | read-only helpers |
+
+Every change asks the gate first and fails closed, is logged to
+`data/actions.jsonl`, and never deletes anything. `nas-mcp`, its Docker proxy
+and `nas-gate` can never be stopped or retired from here.
 
 ## Roadmap
 

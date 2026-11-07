@@ -157,7 +157,9 @@ def load(path: Path | None = None) -> Settings:
     # With no config.yaml, the docker folder mounted by docker-compose.yml is readable.
     if "folders" not in raw:
         if Path(DEFAULT_DOCKER_MOUNT).is_dir():
-            s.folders.append(Folder("docker", DEFAULT_DOCKER_MOUNT, "read"))
+            # Writable only if mounted read-write; writes still need the gate window.
+            access = "write" if os.access(DEFAULT_DOCKER_MOUNT, os.W_OK) else "read"
+            s.folders.append(Folder("docker", DEFAULT_DOCKER_MOUNT, access))
         for name, path in OPTIONAL_MOUNTS.items():
             if Path(path).is_dir():
                 s.folders.append(Folder(name, path, "read"))

@@ -17,8 +17,13 @@ services:
     # ./data holds config.yaml (everything specific to this NAS) and the event log.
     volumes:
       - ./data:/data
-      # Folders the server may read. Access levels are set in data/config.yaml.
-      - /volume1/docker:/host/docker:ro
+      # The docker folder: ':rw' lets it edit Compose files (still only while the
+      # gate's agent window is open); ':ro' keeps it read-only.
+      - /volume1/docker:/host/docker:rw
+      # Optional, read-only: DSM's API definitions and UI, for looking things up.
+      # - /usr/syno/synoman/webapi:/host/webapi:ro
+      # - /usr/syno/synoman/webman:/host/webman:ro
+      # - /var/packages/ContainerManager/target:/host/container-manager:ro
     environment:
       NASMCP_TOKEN: ${NASMCP_TOKEN}
       NASMCP_DSM_USER: ${NASMCP_DSM_USER}
@@ -39,8 +44,10 @@ services:
       TZ: ${TZ:-UTC}
     networks: [nasmcp]
 
-  # Read-only window into Docker: lists, inspects, logs and events only.
-  # POST is off, so nothing can be started, stopped or changed through it.
+  # Window into Docker. Reads (lists, inspect, logs, events) plus POST for the
+  # few container changes nas-mcp offers (start, stop, restart, restart policy,
+  # rename). exec, images build, volumes, networks and swarm stay blocked.
+  # Set POST: 0 for a strictly read-only setup.
   docker-proxy:
     image: tecnativa/docker-socket-proxy:latest
     container_name: nas-mcp-docker-proxy
@@ -50,7 +57,7 @@ services:
       IMAGES: 1
       EVENTS: 1
       INFO: 1
-      POST: 0
+      POST: 1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks: [nasmcp]

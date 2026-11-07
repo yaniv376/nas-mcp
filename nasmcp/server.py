@@ -18,8 +18,10 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from . import files as filesmod
 from .config import Settings
-from .core import NAS
+from .core import NAS, Changes
+from . import writes as writesmod
 from .docker import DockerError
+from .dsm import DSMError
 
 log = logging.getLogger("nasmcp.server")
 VERSION = os.environ.get("NASMCP_VERSION", "dev")
@@ -35,6 +37,10 @@ Answer the owner in plain language; he is not a network or Docker expert.
 
 RO = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True,
                      openWorldHint=False)
+CHANGE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False,
+                         openWorldHint=False)
+DISRUPTIVE = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False,
+                             openWorldHint=False)
 
 
 def _safe(fn):
@@ -42,7 +48,8 @@ def _safe(fn):
     def wrapper(*a, **kw):
         try:
             return fn(*a, **kw)
-        except (DockerError, filesmod.AccessDenied, ValueError) as e:
+        except (DockerError, filesmod.AccessDenied, ValueError, writesmod.WriteDenied,
+                DSMError) as e:
             raise ToolError(str(e)) from e
     wrapper.__name__ = fn.__name__
     wrapper.__doc__ = fn.__doc__
@@ -172,6 +179,73 @@ def build_mcp(nas: NAS, provider=None) -> MCPServer:
         """Find files by name pattern (for example '*.yaml') inside an allowed folder."""
         return filesmod.search(s, folder, pattern, path)
 
+    ch = Changes(nas)
+
+    @m.tool(annotations=RO)
+    @_safe
+    def projects_list() -> list[dict]:
+        """Container Manager projects (Compose) with their folder and status."""
+        return ch.projects()
+
+    @m.tool(annotations=RO)
+    @_safe
+    def actions_log(limit: int = 30) -> list[dict]:
+        """Changes this server made, newest last."""
+        return nas.audit.recent(max(1, min(limit, 200)))
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def container_control(name: str, action: str) -> dict:
+        """Start, stop or restart a container (action: start | stop | restart).
+        Needs the gate's agent window open."""
+        return ch.container(name, action)
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def container_set_auto_restart(name: str, policy: str = "unless-stopped") -> dict:
+        """Set a container's restart policy (unless-stopped | always | on-failure | no),
+        so it comes back by itself after a crash, update or reboot."""
+        return ch.restart_policy(name, policy)
+
+    @m.tool(annotations=DISRUPTIVE)
+    @_safe
+    def container_retire(name: str) -> dict:
+        """Retire a container: stop it, turn off auto-restart and rename it
+        to_delete_<name> for the owner to delete later. Asks for approval on the
+        owner's phone and waits up to 2 minutes."""
+        return ch.retire(name)
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def compose_write(project: str, content: str) -> dict:
+        """Replace a project's Compose file (project = its folder under docker, for
+        example 'rclone'). The YAML is checked first (indentation, services, image)
+        and the old file is backed up. Run project_run(project, 'build') afterwards
+        to apply it."""
+        return ch.compose_write(project, content)
+
+    @m.tool(annotations=RO)
+    @_safe
+    def compose_backups(project: str) -> list[str]:
+        """Earlier versions of a project's Compose file, newest first."""
+        return ch.compose_backups(project)
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def compose_restore(project: str, backup: str) -> dict:
+        """Put back an earlier Compose file from compose_backups (the current one is
+        backed up too). Run project_run(project, 'build') afterwards."""
+        return ch.compose_restore(project, backup)
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def project_run(project: str, action: str) -> dict:
+        """Run a Container Manager project action: stop | build | start | restart.
+        'build' stops the project first, then rebuilds it from its Compose file
+        (a plain restart does not apply Compose changes). Project = its name in
+        Container Manager."""
+        return ch.project(project, action)
+
     @m.tool(annotations=RO)
     @_safe
     def files_grep(folder: str, pattern: str, path: str = "", glob: str = "*",
@@ -208,7 +282,8 @@ class BearerGuard:
         self.oauth = oauth
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["path"] == "/health":
+        if scope["type"] != "http" or scope["path"] == "/health" \
+                or scope["path"].startswith("/approve/"):
             return await self.app(scope, receive, send)
         if self.oauth and scope["path"] != "/":
             return await self.app(scope, receive, send)
@@ -229,6 +304,14 @@ def build_app(nas: NAS, recorder=None, provider=None):
     m = build_mcp(nas, provider)
     if provider is not None:
         _oauth_routes(m, provider, nas.s.language)
+
+    @m.custom_route("/approve/{aid}/{secret}/{action}", methods=["GET"])
+    async def approve(request: Request) -> Response:
+        p = request.path_params
+        result = nas.approvals.decide(p["aid"], p["secret"], p["action"])
+        t = OT.get(nas.s.language, OT["en"])
+        title = {"approved": t["approved"].split(".")[0], "denied": t["denied"]}.get(result, t["expired"])
+        return _page(nas.s.language, title, "")
 
     @m.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> Response:

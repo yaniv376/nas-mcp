@@ -14,6 +14,8 @@ from .docker import DockerClient, DockerError
 from .dsm import DSMClient, DSMError
 from .events import EventLog
 from .gate import GateClient, GateError
+from . import writes as w
+from pathlib import Path
 
 
 class NAS:
@@ -27,6 +29,8 @@ class NAS:
         self._dsm_factory = dsm_factory or (lambda: DSMClient(
             settings.dsm_url, settings.dsm_user, settings.dsm_password, settings.dsm_verify_tls))
         self._wt_cache: tuple[float, wtmod.WatchtowerReport] | None = None
+        self.audit = w.Audit(events.path.parent / "actions.jsonl")
+        self.approvals = w.Approvals(settings.public_url, None)
 
     # -- DSM ---------------------------------------------------------------------
     def system(self) -> dict:
@@ -216,6 +220,90 @@ class NAS:
             "backups": self.backups(),
             "security_score": scan.get("score") if isinstance(scan, dict) else None,
         }
+
+
+class Changes:
+    """Write operations. Each checks the gate window first and is audited."""
+
+    def __init__(self, nas: "NAS"):
+        self.nas = nas
+
+    def _guard(self) -> dict:
+        return w.require_window(self.nas.gate)
+
+    def _docker_dir(self) -> Path:
+        f = self.nas.s.folder("docker")
+        if not f or f.access != "write":
+            raise w.WriteDenied("The docker folder is mounted read-only: change ':ro' to ':rw' "
+                                "on the /volume1/docker line of nas-mcp's compose file.")
+        return Path(f.path)
+
+    def _project_dir(self, project: str) -> Path:
+        root = self._docker_dir().resolve()
+        d = (root / project.strip("/")).resolve()
+        if root not in d.parents:
+            raise w.WriteDenied("the project folder must be inside the docker folder")
+        return d
+
+    def _do(self, action: str, target: str, fn, **extra):
+        win = self._guard()
+        try:
+            result = fn()
+        except Exception as e:
+            self.nas.audit.add(action, target, f"failed: {e}", **extra)
+            raise
+        self.nas.audit.add(action, target, "ok", **extra)
+        return {"done": True, "window_minutes_left": win["remaining_minutes"], **(
+            result if isinstance(result, dict) else {"result": result})}
+
+    def container(self, name: str, action: str) -> dict:
+        c = self.nas._find(name)
+        cname = (c.get("Names") or [name])[0].lstrip("/")
+        return self._do(f"container_{action}", cname,
+                        lambda: w.container_action(self.nas.docker, c["Id"], cname, action))
+
+    def restart_policy(self, name: str, policy: str) -> dict:
+        c = self.nas._find(name)
+        cname = (c.get("Names") or [name])[0].lstrip("/")
+        return self._do("restart_policy", cname,
+                        lambda: w.set_restart_policy(self.nas.docker, c["Id"], cname, policy),
+                        policy=policy)
+
+    def retire(self, name: str) -> dict:
+        c = self.nas._find(name)
+        cname = (c.get("Names") or [name])[0].lstrip("/")
+        w._check_not_protected(cname)
+        self._guard()
+        self.nas.approvals.ask(f"Retire container {cname} (stop it and rename to to_delete_)")
+        return self._do("retire", cname,
+                        lambda: {"renamed_to": w.retire_container(self.nas.docker, c["Id"], cname)})
+
+    def compose_write(self, project: str, content: str) -> dict:
+        d = self._project_dir(project)
+        return self._do("compose_write", project, lambda: w.write_compose(d, content))
+
+    def compose_restore(self, project: str, backup: str) -> dict:
+        d = self._project_dir(project)
+        return self._do("compose_restore", project, lambda: w.restore_compose(d, backup),
+                        backup=backup)
+
+    def compose_backups(self, project: str) -> list[str]:
+        return w.list_backups(self._project_dir(project))
+
+    def projects(self) -> list[dict]:
+        with self.nas._dsm_factory() as dsm:
+            return w.list_projects(dsm)
+
+    def project(self, name: str, action: str) -> dict:
+        def run():
+            with self.nas._dsm_factory() as dsm:
+                p = w.find_project(dsm, name)
+                if action == "build":
+                    # Build applies compose changes only on a stopped project.
+                    w.project_action(dsm, p["id"], "stop")
+                out = w.project_action(dsm, p["id"], action)
+            return {"project": name, "output_tail": out}
+        return self._do(f"project_{action}", name, run)
 
 
 def _fmt(t: float | None) -> str:
