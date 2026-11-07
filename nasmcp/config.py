@@ -85,7 +85,10 @@ _ENV = {
     "docker_url": "NASMCP_DOCKER_URL",
     "timezone": "NASMCP_TIMEZONE",
     "language": "NASMCP_LANGUAGE",
+    "watchtower_container": "NASMCP_WATCHTOWER",
 }
+
+DEFAULT_DOCKER_MOUNT = "/host/docker"
 
 
 def _from_dict(raw: dict[str, Any]) -> Settings:
@@ -123,4 +126,7 @@ def load(path: Path | None = None) -> Settings:
         val = os.environ.get(env)
         if val:
             setattr(s, attr, val)
+    # With no config.yaml, the docker folder mounted by docker-compose.yml is readable.
+    if "folders" not in raw and Path(DEFAULT_DOCKER_MOUNT).is_dir():
+        s.folders = [Folder("docker", DEFAULT_DOCKER_MOUNT, "read")]
     return s

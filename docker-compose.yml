@@ -23,6 +23,10 @@ services:
       NASMCP_DSM_USER: ${NASMCP_DSM_USER}
       NASMCP_DSM_PASSWORD: ${NASMCP_DSM_PASSWORD}
       NASMCP_GATE_TOKEN: ${NASMCP_GATE_TOKEN:-}
+      # Optional without a config.yaml:
+      NASMCP_DSM_URL: ${NASMCP_DSM_URL:-}
+      NASMCP_GATE_URL: ${NASMCP_GATE_URL:-}
+      NASMCP_LANGUAGE: ${NASMCP_LANGUAGE:-en}
       TZ: ${TZ:-UTC}
     networks: [nasmcp]
 
