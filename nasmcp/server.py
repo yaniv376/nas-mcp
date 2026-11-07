@@ -283,12 +283,15 @@ def build_mcp(nas: NAS, provider=None) -> MCPServer:
 
 # -- HTTP app -------------------------------------------------------------------------
 
-def _authorized(settings: Settings, request: Request) -> bool:
+def _authorized(settings: Settings, request: Request, health_only: bool = False) -> bool:
     if not settings.token:
         return False
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
-        return hmac.compare_digest(auth[7:].strip(), settings.token)
+        got = auth[7:].strip()
+        if hmac.compare_digest(got, settings.token):
+            return True
+        return health_only and hmac.compare_digest(got, settings.health_token)
     return False
 
 
@@ -312,7 +315,7 @@ class BearerGuard:
         if self.oauth and scope["path"] != "/":
             return await self.app(scope, receive, send)
         request = Request(scope)
-        ok = _authorized(self.settings, request)
+        ok = _authorized(self.settings, request, health_only=scope["path"] == "/api/health")
         if not ok and scope["path"] == "/" and self.settings.token:
             supplied = request.query_params.get("token") or request.cookies.get("nasmcp", "")
             ok = bool(supplied) and hmac.compare_digest(supplied, self.settings.token)
@@ -358,7 +361,7 @@ def build_app(nas: NAS, recorder=None, provider=None):
     async def api_health(request: Request) -> Response:
         """For Home Assistant: last health scan (bearer token); ?refresh=1 rescans."""
         import anyio
-        if not _authorized(nas.s, request):
+        if not _authorized(nas.s, request, health_only=True):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if request.query_params.get("refresh") or not nas.last_health:
             await anyio.to_thread.run_sync(nas.health_scan)

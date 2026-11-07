@@ -82,7 +82,8 @@ and `nas-gate` can never be stopped or retired from here.
 ## After every update (stage 1d)
 
 A watcher notices when a container starts running a new image (Watchtower or a
-rebuild), checks it 5 minutes later (crash loop, stopped, repeated errors), and if
+rebuild). It is woken by Docker's own start events, so it costs nothing while
+nothing happens (plus a light safety look every 15 minutes). It checks the container 5 minutes later (crash loop, stopped, repeated errors), and if
 it is broken sends an alert with **Roll back** / **Ignore** (phone push and Home
 Assistant's notification panel). Rollback recreates the container with the same
 settings and the previous image (keep Watchtower's cleanup off), labels it so
@@ -92,6 +93,25 @@ approval; from chat, `update_rollback` needs the agent window.
 
 `nas_health_scan` (and `GET /api/health` for Home Assistant) scores disks, space,
 data scrubbing, disk protection, DSM updates, backups, containers and broken updates.
+
+Home Assistant: create an `input_text` helper named `nas_mcp_token` in password
+mode (max 255). With `NASMCP_HA_URL`/`NASMCP_HA_TOKEN` set, the server writes a
+read-only token into it on start. That token opens only `/api/health`, so a REST
+sensor can read the score without a copy of the main token:
+
+```yaml
+rest:
+  - resource: "http://NAS-IP:8790/api/health"
+    scan_interval: 1800
+    headers:
+      Authorization: "Bearer {{ states('input_text.nas_mcp_token') }}"
+    sensor:
+      - name: "NAS health score"
+        value_template: "{{ value_json.score }}"
+        json_attributes: [counts, findings, finished_at]
+```
+
+`/api/health?refresh=1` runs a new scan first (for a "scan now" button).
 
 ## Roadmap
 

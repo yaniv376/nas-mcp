@@ -76,6 +76,10 @@ class Settings:
     ha_url: str = ""
     ha_token: str = ""
     ha_notify_service: str = ""                # e.g. notify.mobile_app_myphone
+    # A Home Assistant input_text (password mode) that this server fills in with
+    # a read-only token for /api/health, so HA's health sensor needs no manual
+    # setup. Empty turns it off; nothing happens if the helper does not exist.
+    ha_token_entity: str = "input_text.nas_mcp_token"
     webhook_url: str = ""
 
     folders: list[Folder] = field(default_factory=list)
@@ -84,6 +88,15 @@ class Settings:
     # limits
     max_file_bytes: int = 512_000
     max_log_lines: int = 2000
+
+    @property
+    def health_token(self) -> str:
+        """Read-only token, accepted only by /api/health (derived from `token`)."""
+        if not self.token:
+            return ""
+        import hashlib
+        import hmac
+        return hmac.new(self.token.encode(), b"nas-mcp/api/health", hashlib.sha256).hexdigest()[:40]
 
     def folder(self, name: str) -> Folder | None:
         for f in self.folders:
@@ -109,6 +122,7 @@ _ENV = {
     "ha_url": "NASMCP_HA_URL",
     "ha_token": "NASMCP_HA_TOKEN",
     "ha_notify_service": "NASMCP_HA_NOTIFY_SERVICE",
+    "ha_token_entity": "NASMCP_HA_TOKEN_ENTITY",
     "webhook_url": "NASMCP_WEBHOOK_URL",
 }
 

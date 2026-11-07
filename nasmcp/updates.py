@@ -29,6 +29,8 @@ from . import writes as w
 log = logging.getLogger("nasmcp.updates")
 
 CHECK_AFTER = 300            # seconds after the update
+FALLBACK = 900               # safety re-check when no Docker event arrived
+SETTLE = 10                  # wait after a start event so a recreate can finish
 SKIP = ("nas-mcp", "nas-mcp-docker-proxy")
 WT_LABEL = "com.centurylinklabs.watchtower.enable"
 
@@ -54,7 +56,7 @@ class UpdateWatcher(threading.Thread):
     def __init__(self, docker: DockerClient, data_dir: Path,
                  notify: Callable[[Update, dict[str, str]], None] | None = None,
                  audit: w.Audit | None = None, docker_root: Path | None = None,
-                 interval: float = 60, check_after: float = CHECK_AFTER):
+                 interval: float = FALLBACK, check_after: float = CHECK_AFTER):
         super().__init__(name="update-watcher")
         self.docker = docker
         self.file = data_dir / "updates.json"
@@ -64,6 +66,7 @@ class UpdateWatcher(threading.Thread):
         self.interval = interval
         self.check_after = check_after
         self.lock = threading.Lock()
+        self.wake = threading.Event()
         self.seen: dict[str, dict] = {}
         self.updates: dict[str, Update] = {}
         self._load()
@@ -90,14 +93,30 @@ class UpdateWatcher(threading.Thread):
         tmp.replace(self.file)
 
     # -- the loop ------------------------------------------------------------------
+    def poke(self, item: dict | None = None) -> None:
+        """Docker event hook: a container started, so look again soon."""
+        if item is None or (item.get("type") == "container"
+                            and str(item.get("action", "")).split(":")[0] == "start"):
+            self.wake.set()
+
+    def next_wait(self, now: float | None = None) -> float:
+        """Seconds to sleep: until the next due check, at most the fallback interval."""
+        now = now or time.time()
+        due = [u.at + self.check_after - now for u in self.updates.values() if not u.checked]
+        return max(1.0, min([self.interval] + due))
+
     def run(self) -> None:  # pragma: no cover - timing loop
+        # Event-driven: Docker start events wake the watcher (see poke); the
+        # timeout covers due checks and a slow safety scan if events were missed.
         while True:
             try:
                 self.scan()
                 self.check_due()
             except Exception as e:
                 log.warning("update watcher: %s", e)
-            time.sleep(self.interval)
+            if self.wake.wait(self.next_wait()):
+                time.sleep(SETTLE)
+                self.wake.clear()
 
     def scan(self, now: float | None = None) -> list[Update]:
         """Compare every container's image with what was seen last time."""

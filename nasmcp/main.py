@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 
 import uvicorn
 
@@ -97,7 +99,21 @@ def main() -> None:
     watcher = UpdateWatcher(docker, config.DATA_DIR, notify=update_alert, audit=nas.audit,
                             docker_root=_P(dfolder.path) if dfolder and dfolder.access == "write" else None)
     nas.watcher = watcher
+    recorder.listeners.append(watcher.poke)
     watcher.start()
+
+    def ha_token_loop():
+        from . import notify as _n
+        log = logging.getLogger("nasmcp.ha")
+        for attempt in range(20):           # HA may be down when the NAS boots
+            res = _n.sync_ha_token(settings)
+            if res in ("set", "same", "missing", "off"):
+                if res == "set":
+                    log.info("health token written to %s", settings.ha_token_entity)
+                return
+            log.info("health token not written yet (%s), retrying", res)
+            time.sleep(min(30 * (attempt + 1), 600))
+    threading.Thread(target=ha_token_loop, name="ha-token", daemon=True).start()
     app, _ = build_app(nas, recorder, provider)
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("NASMCP_PORT", "8790")),
                 log_level="info", proxy_headers=True)

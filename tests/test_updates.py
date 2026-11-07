@@ -155,3 +155,52 @@ def test_health_scan(nas):  # noqa: F811
     titles = " | ".join(f["title"] for f in h["findings"])
     assert "85.0% full" in titles and "rclone" in titles
     assert 0 <= h["score"] < 100
+
+
+def test_poke_wakes_only_on_container_start(world):
+    _, watcher, _, _ = world
+    watcher.poke({"type": "container", "action": "die", "name": "x"})
+    assert not watcher.wake.is_set()
+    watcher.poke({"type": "image", "action": "pull", "name": "x"})
+    assert not watcher.wake.is_set()
+    watcher.poke({"type": "container", "action": "start", "name": "x"})
+    assert watcher.wake.is_set()
+
+
+def test_next_wait_follows_due_checks(world):
+    w, watcher, _, _ = world
+    assert watcher.next_wait(now=1000) == up.FALLBACK     # nothing pending: slow safety scan
+    watcher.scan(now=1000)
+    w.containers[0]["ImageID"] = "sha256:new"
+    watcher.scan(now=1100)
+    assert watcher.next_wait(now=1200) == pytest.approx(200)   # check is due at 1400
+    watcher.check_due(now=1500)
+    assert watcher.next_wait(now=1500) == up.FALLBACK
+
+
+def test_sync_ha_token(nas):  # noqa: F811
+    from nasmcp import notify
+    s = nas.s
+    s.ha_url, s.ha_token = "http://ha", "ha-secret"
+    calls = []
+
+    def handler(req):
+        calls.append((req.method, req.url.path, req.content))
+        if req.url.path.endswith(".missing"):
+            return httpx.Response(404)
+        return httpx.Response(200, json={"state": "old"})
+
+    orig_get, orig_post = httpx.get, httpx.post
+    tr = httpx.MockTransport(handler)
+    httpx.get = lambda url, **k: httpx.Client(transport=tr).get(url, **k)
+    httpx.post = lambda url, **k: httpx.Client(transport=tr).post(url, **k)
+    try:
+        assert notify.sync_ha_token(s) == "set"
+        assert calls[-1][1] == "/api/services/input_text/set_value"
+        assert json.loads(calls[-1][2])["value"] == s.health_token != s.token
+        s.ha_token_entity = "input_text.missing"
+        assert notify.sync_ha_token(s) == "missing"
+        s.ha_token_entity = ""
+        assert notify.sync_ha_token(s) == "off"
+    finally:
+        httpx.get, httpx.post = orig_get, orig_post

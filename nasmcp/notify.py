@@ -76,3 +76,30 @@ def send(settings: Settings, title: str, message: str,
             raise NotifyError(f"webhook replied {r.status_code}")
     else:
         raise NotifyError("notifications are off (notify_mode: none)")
+
+
+def sync_ha_token(settings: Settings) -> str:
+    """Put the read-only health token into Home Assistant's input_text helper.
+
+    Returns "set", "same", "missing" (no such helper), "off" or an error text.
+    The helper is created by the owner (password mode); this never creates it.
+    """
+    ent = settings.ha_token_entity
+    if not (ent and ent.startswith("input_text.") and settings.ha_url and settings.ha_token
+            and settings.health_token):
+        return "off"
+    base = settings.ha_url.rstrip("/")
+    hdr = {"Authorization": f"Bearer {settings.ha_token}"}
+    try:
+        r = httpx.get(f"{base}/api/states/{ent}", headers=hdr, timeout=15)
+        if r.status_code == 404:
+            return "missing"
+        r.raise_for_status()
+        if r.json().get("state") == settings.health_token:
+            return "same"
+        r = httpx.post(f"{base}/api/services/input_text/set_value", headers=hdr, timeout=15,
+                       json={"entity_id": ent, "value": settings.health_token})
+        r.raise_for_status()
+        return "set"
+    except Exception as e:  # HA may be restarting; the caller retries
+        return f"error: {e}"

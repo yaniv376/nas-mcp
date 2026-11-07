@@ -74,3 +74,16 @@ def test_tool_call_over_http(server):
     assert {"nas_overview", "container_diagnose", "file_read"} <= names
     data = json.loads(res.content[0].text)
     assert any(p["code"] == "broke_after_update" for p in data["problems"])
+
+
+def test_health_token_only_opens_api_health(server, nas):  # noqa: F811
+    ht = nas.s.health_token
+    assert ht and ht != nas.s.token
+    hdr = {"Authorization": f"Bearer {ht}"}
+    nas.last_health = {"score": 90, "counts": {}, "findings": [], "finished_at": "x"}
+    r = httpx.get(f"{server}/api/health", headers=hdr)
+    assert r.status_code == 200 and r.json()["score"] == 90
+    assert httpx.get(f"{server}/api/health").status_code == 401
+    # The health token is not a key to anything else.
+    assert httpx.post(f"{server}/mcp", json={}, headers=hdr).status_code == 401
+    assert httpx.get(f"{server}/", headers=hdr).status_code == 401

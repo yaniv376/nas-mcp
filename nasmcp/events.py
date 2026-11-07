@@ -104,6 +104,7 @@ class Recorder(threading.Thread):
         self.store = store
         self.connected = False
         self.last_error = ""
+        self.listeners: list = []   # callables(item), e.g. the update watcher
 
     def run(self) -> None:  # pragma: no cover - needs a live daemon
         backoff = 5
@@ -115,6 +116,11 @@ class Recorder(threading.Thread):
                     item = compact(ev)
                     if item:
                         self.store.append(item)
+                        for fn in self.listeners:
+                            try:
+                                fn(item)
+                            except Exception as e:  # a listener never stops recording
+                                log.warning("event listener: %s", e)
                     backoff = 5
             except Exception as e:
                 self.last_error = str(e)
