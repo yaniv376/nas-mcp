@@ -30,6 +30,8 @@ class NAS:
             settings.dsm_url, settings.dsm_user, settings.dsm_password, settings.dsm_verify_tls))
         self._wt_cache: tuple[float, wtmod.WatchtowerReport] | None = None
         self.audit = w.Audit(events.path.parent / "actions.jsonl")
+        self.watcher = None          # set by main (UpdateWatcher)
+        self.last_health: dict | None = None
         self.approvals = w.Approvals(settings.public_url, None)
 
     # -- DSM ---------------------------------------------------------------------
@@ -222,6 +224,12 @@ class NAS:
         }
 
 
+    def health_scan(self) -> dict:
+        from . import health
+        self.last_health = health.scan(self)
+        return self.last_health
+
+
 class Changes:
     """Write operations. Each checks the gate window first and is audited."""
 
@@ -293,6 +301,16 @@ class Changes:
     def projects(self) -> list[dict]:
         with self.nas._dsm_factory() as dsm:
             return w.list_projects(dsm)
+
+    def rollback(self, name: str) -> dict:
+        if not self.nas.watcher:
+            raise w.WriteDenied("the update watcher is not running")
+        u = self.nas.watcher.find(name)
+        if not u:
+            raise ValueError(f"No recorded update for '{name}' (updates are recorded from "
+                             "the moment nas-mcp started watching).")
+        return self._do("rollback", name, lambda: {"result": self.nas.watcher.rollback(u),
+                                                   "previous_image": u.old_image[:19]})
 
     def project(self, name: str, action: str) -> dict:
         if name in ("nas-mcp", "nas-gate"):

@@ -183,6 +183,14 @@ def diagnose(container: dict, inspect: dict, logs: str = "",
     out: list[Finding] = []
     if is_retired(name):
         return out  # retired on purpose, waiting for the owner to delete it
+    orphan = re.match(r"^[0-9a-f]{12}_(.+)$", name)
+    if orphan and s["compose_project"]:
+        out.append(Finding(name, "high", "orphan_compose_rename",
+                           "Container Manager lost track of this container",
+                           f"It was renamed '{name}' during a rebuild, so the project "
+                           f"'{s['compose_project']}' cannot stop or rebuild it.",
+                           suggestion=f"Stop it and rename it to to_delete_{orphan.group(1)}_old "
+                                      "(Portainer or container_retire), then Build the project."))
     state = s["state"]
     now = now or datetime.now().timestamp()
     started = parse_time(s["started_at"])

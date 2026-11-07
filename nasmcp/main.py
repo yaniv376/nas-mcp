@@ -73,6 +73,31 @@ def main() -> None:
                         f"nasmcp_act_{a.id}")
         nas.approvals.send = ask_change
         nas.approvals.on_done = lambda a: _n.ha_panel_dismiss(settings, f"nasmcp_act_{a.id}")
+    from .updates import UpdateWatcher
+    from pathlib import Path as _P
+    dfolder = settings.folder("docker")
+    he2 = settings.language == "he"
+
+    def update_alert(u, paths):
+        if settings.notify_mode == "none":
+            return
+        from . import notify as _n
+        pub = settings.public_url.rstrip("/")
+        lan = (settings.lan_url or _guess_lan_url(settings) or pub).rstrip("/")
+        title = (f"{u.name} נשבר אחרי עדכון" if he2 else f"{u.name} broke after an update")
+        body = "; ".join(u.problems)[:300]
+        yes, no = ("החזר לגרסה הקודמת", "התעלם") if he2 else ("Roll back", "Ignore")
+        if pub:
+            _n.send(settings, title, body, actions=[{"title": yes, "uri": pub + paths["rollback"]},
+                                                    {"title": no, "uri": pub + paths["ignore"]}],
+                    tag=f"nasmcp-upd-{u.id}")
+        _n.ha_panel(settings, title, f"{body}\n\n**[{yes}]({lan}{paths['rollback']})** · "
+                                     f"[{no}]({lan}{paths['ignore']})", f"nasmcp_upd_{u.id}")
+
+    watcher = UpdateWatcher(docker, config.DATA_DIR, notify=update_alert, audit=nas.audit,
+                            docker_root=_P(dfolder.path) if dfolder and dfolder.access == "write" else None)
+    nas.watcher = watcher
+    watcher.start()
     app, _ = build_app(nas, recorder, provider)
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("NASMCP_PORT", "8790")),
                 log_level="info", proxy_headers=True)

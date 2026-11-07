@@ -183,6 +183,30 @@ def build_mcp(nas: NAS, provider=None) -> MCPServer:
 
     @m.tool(annotations=RO)
     @_safe
+    def nas_health_scan() -> dict:
+        """Health score of the NAS (disks, space, data scrubbing, disk protection, DSM
+        updates, backups, containers, broken updates) with findings and advice.
+        The NAS gate's security_scan covers security separately."""
+        return nas.health_scan()
+
+    @m.tool(annotations=RO)
+    @_safe
+    def updates_recent() -> list[dict]:
+        """Container updates seen by the post-update guard: which image changed, whether
+        the 5-minute check passed, problems found, and rollbacks."""
+        return nas.watcher.recent() if nas.watcher else []
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def update_rollback(name: str) -> dict:
+        """Roll a container back to the image it ran before its last update: recreate
+        it with the same settings and the previous image, keep Watchtower away from it,
+        and pin the image in its Compose file if it has one. The broken container is
+        renamed to_delete_<name>_broken_<time>."""
+        return ch.rollback(name)
+
+    @m.tool(annotations=RO)
+    @_safe
     def projects_list() -> list[dict]:
         """Container Manager projects (Compose) with their folder and status."""
         return ch.projects()
@@ -283,7 +307,7 @@ class BearerGuard:
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope["path"] == "/health" \
-                or scope["path"].startswith("/approve/"):
+                or scope["path"].startswith(("/approve/", "/update/")):
             return await self.app(scope, receive, send)
         if self.oauth and scope["path"] != "/":
             return await self.app(scope, receive, send)
@@ -312,6 +336,36 @@ def build_app(nas: NAS, recorder=None, provider=None):
         t = OT.get(nas.s.language, OT["en"])
         title = {"approved": t["approved"].split(".")[0], "denied": t["denied"]}.get(result, t["expired"])
         return _page(nas.s.language, title, "")
+
+    @m.custom_route("/update/{uid}/{secret}/{action}", methods=["GET"])
+    async def update_decide(request: Request) -> Response:
+        import anyio
+        p = request.path_params
+        if not nas.watcher:
+            return _page(nas.s.language, "—", "")
+        try:
+            result = await anyio.to_thread.run_sync(
+                lambda: nas.watcher.decide(p["uid"], p["secret"], p["action"]))
+        except Exception as e:  # noqa: BLE001
+            result = f"failed: {e}"
+        he = nas.s.language == "he"
+        titles = {"rolled back": "הוחזר לגרסה הקודמת" if he else "Rolled back",
+                  "ignored": "סומן כתקין" if he else "Marked as fine",
+                  "expired": "הקישור פג" if he else "Link expired"}
+        return _page(nas.s.language, titles.get(result, str(result)), "")
+
+    @m.custom_route("/api/health", methods=["GET"])
+    async def api_health(request: Request) -> Response:
+        """For Home Assistant: last health scan (bearer token); ?refresh=1 rescans."""
+        import anyio
+        if not _authorized(nas.s, request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if request.query_params.get("refresh") or not nas.last_health:
+            await anyio.to_thread.run_sync(nas.health_scan)
+        h = nas.last_health or {}
+        return JSONResponse({"score": h.get("score"), "counts": h.get("counts"),
+                             "findings": h.get("findings", [])[:20],
+                             "finished_at": h.get("finished_at")})
 
     @m.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> Response:

@@ -79,11 +79,24 @@ Every change asks the gate first and fails closed, is logged to
 `data/actions.jsonl`, and never deletes anything. `nas-mcp`, its Docker proxy
 and `nas-gate` can never be stopped or retired from here.
 
+## After every update (stage 1d)
+
+A watcher notices when a container starts running a new image (Watchtower or a
+rebuild), checks it 5 minutes later (crash loop, stopped, repeated errors), and if
+it is broken sends an alert with **Roll back** / **Ignore** (phone push and Home
+Assistant's notification panel). Rollback recreates the container with the same
+settings and the previous image (keep Watchtower's cleanup off), labels it so
+Watchtower leaves it alone, pins the image by digest in its Compose file, and
+renames the broken one `to_delete_<name>_broken_<time>`. Tapping the alert is the
+approval; from chat, `update_rollback` needs the agent window.
+
+`nas_health_scan` (and `GET /api/health` for Home Assistant) scores disks, space,
+data scrubbing, disk protection, DSM updates, backups, containers and broken updates.
+
 ## Roadmap
 
 - 1c: write tools behind an "MCP" window in the NAS gate, phone approval for
   destructive actions, nothing ever deleted (renamed `_to_delete_…`)
-- 1d: post-update checks with a one-tap rollback, NAS health scan
 - 2: media apps (Seerr, Radarr, Sonarr, Jellyfin)
 
 ## Development
