@@ -167,7 +167,12 @@ def grep(settings: Settings, folder: str, pattern: str, path: str = "", glob: st
             try:
                 if full.is_symlink() or _blocked(full) or full.stat().st_size > max_file_mb * 1_000_000:
                     continue
-                text = full.read_text(encoding="utf-8", errors="replace")
+                if name.endswith(".gz"):
+                    import gzip
+                    with gzip.open(full, "rb") as gz:
+                        text = gz.read(max_file_mb * 4_000_000).decode("utf-8", "replace")
+                else:
+                    text = full.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
             files_scanned += 1
