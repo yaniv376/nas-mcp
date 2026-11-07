@@ -108,6 +108,9 @@ _ENV = {
 }
 
 DEFAULT_DOCKER_MOUNT = "/host/docker"
+# Optional: DSM's own Web API definition files (read-only), used to look up
+# which methods each DSM API offers before writing tools against it.
+DEFAULT_WEBAPI_MOUNT = "/host/webapi"
 
 
 def _from_dict(raw: dict[str, Any]) -> Settings:
@@ -146,6 +149,9 @@ def load(path: Path | None = None) -> Settings:
         if val:
             setattr(s, attr, val)
     # With no config.yaml, the docker folder mounted by docker-compose.yml is readable.
-    if "folders" not in raw and Path(DEFAULT_DOCKER_MOUNT).is_dir():
-        s.folders = [Folder("docker", DEFAULT_DOCKER_MOUNT, "read")]
+    if "folders" not in raw:
+        if Path(DEFAULT_DOCKER_MOUNT).is_dir():
+            s.folders.append(Folder("docker", DEFAULT_DOCKER_MOUNT, "read"))
+        if Path(DEFAULT_WEBAPI_MOUNT).is_dir():
+            s.folders.append(Folder("dsm_webapi", DEFAULT_WEBAPI_MOUNT, "read"))
     return s
