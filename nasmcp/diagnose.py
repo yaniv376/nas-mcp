@@ -174,6 +174,8 @@ def diagnose(container: dict, inspect: dict, logs: str = "",
     s = summarize(container, inspect)
     name = s["name"]
     out: list[Finding] = []
+    if name.startswith("_to_delete"):
+        return out  # retired on purpose, waiting for the owner to delete it
     state = s["state"]
     now = now or datetime.now().timestamp()
     started = parse_time(s["started_at"])
@@ -259,7 +261,7 @@ def diagnose(container: dict, inspect: dict, logs: str = "",
     # -- security -----------------------------------------------------------------
     cmd = " ".join((cfg.get("Entrypoint") or []) + (cfg.get("Cmd") or []) + (cfg.get("Env") or []))
     for marker in NO_AUTH_MARKERS:
-        if marker.lower() in cmd.lower():
+        if state == "running" and marker.lower() in cmd.lower():
             out.append(Finding(name, "medium", "no_auth", "Service runs without a password",
                                f"found '{marker}' in the command or environment",
                                suggestion="Anyone on the home network can use it. Add a password, "

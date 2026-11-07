@@ -60,7 +60,6 @@ def test_rclone_crash_loop_after_update(nas):
     assert by(d, "rclone", "restart_loop")
     assert by(d, "rclone", "log_flag_changed")
     assert by(d, "rclone", "broke_after_update")
-    assert by(d, "rclone", "no_auth")
     rep = by(d, "rclone", "repeated_error")
     assert rep and "superseded" in rep[0]["evidence"][0]
 
@@ -178,3 +177,14 @@ def test_env_file_blocked(nas):
     env.write_text("X=1")
     with pytest.raises(files.AccessDenied):
         files.read_file(nas.s, "docker", "seerr/.env")
+
+
+def test_no_auth_only_when_running_and_retired_skipped(nas):
+    from nasmcp.diagnose import diagnose
+    insp = dict(fakes.INSPECT["rclone"])
+    insp["State"] = dict(insp["State"], Status="running")
+    assert any(f.code == "no_auth" for f in diagnose(fakes.CONTAINERS[1], insp, ""))
+    insp["State"] = dict(insp["State"], Status="exited", ExitCode=143)
+    assert not any(f.code == "no_auth" for f in diagnose(fakes.CONTAINERS[1], insp, ""))
+    insp["Name"] = "/_to_delete_rclone"
+    assert diagnose(fakes.CONTAINERS[1], insp, "") == []

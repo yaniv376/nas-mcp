@@ -7,9 +7,10 @@ services:
     image: ghcr.io/yaniv376/nas-mcp:latest
     container_name: nas-mcp
     restart: unless-stopped
-    # Run as your DSM user so it can read your folders and write ./data
-    # (1026:100 is the first DSM user and the "users" group on most NAS).
-    user: "${PUID:-1026}:${PGID:-100}"
+    # Synology shares use ACLs that often hide files from plain users, so the
+    # default is root. Mounts stay read-only and Docker is only reachable
+    # through the read-only proxy. Set PUID/PGID to run as a DSM user instead.
+    user: "${PUID:-0}:${PGID:-0}"
     depends_on: [docker-proxy]
     ports:
       - "8790:8790"
