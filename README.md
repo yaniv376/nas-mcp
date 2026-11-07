@@ -5,7 +5,7 @@ disks and volumes, Docker containers (state, logs, diagnosis), Watchtower
 update history, backups, and the [NAS gate](https://github.com/yaniv376/nas-gate)
 security scan.
 
-**Stage 1a: read-only, home network only.** Nothing here can change the NAS:
+**Read-only so far (stages 1a and 1b).** Nothing here can change the NAS:
 Docker is reached through a socket proxy with POST disabled, and mounted
 folders are read-only.
 
@@ -52,9 +52,20 @@ own log in `data/events.jsonl` for `nas_timeline`.
 Everything specific to one NAS lives in `data/config.yaml` and `.env`,
 never in this repository.
 
+## Connecting Claude from anywhere (stage 1b)
+
+1. Give the server a public HTTPS address without opening router ports, for example
+   Tailscale Funnel on the NAS: `tailscale funnel --bg 8790`.
+2. Set `NASMCP_PUBLIC_URL` to that address and configure notifications
+   (`NASMCP_NOTIFY_MODE=ha` with `NASMCP_HA_URL`, `NASMCP_HA_TOKEN`,
+   `NASMCP_HA_NOTIFY_SERVICE`, or `webhook`).
+3. In Claude add a custom connector with `<public url>/mcp`.
+4. Claude registers itself and opens a page with a 4-digit code; your phone gets a
+   notification with Approve / Deny buttons. Tokens are stored only as hashes,
+   access tokens last 8 hours and rotate through refresh tokens.
+
 ## Roadmap
 
-- 1b: OAuth and a public address (Tailscale Funnel or Cloudflare Tunnel) for Claude
 - 1c: write tools behind an "MCP" window in the NAS gate, phone approval for
   destructive actions, nothing ever deleted (renamed `_to_delete_…`)
 - 1d: post-update checks with a one-tap rollback, NAS health scan

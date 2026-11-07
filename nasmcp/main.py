@@ -26,7 +26,26 @@ def main() -> None:
     nas = NAS(settings, events, docker=docker)
     recorder = Recorder(docker, events)
     recorder.start()
-    app, _ = build_app(nas, recorder)
+    provider = None
+    if settings.public_url:
+        from . import notify
+        from .oauth import PhoneApprovalProvider, Store
+        he = settings.language == "he"
+
+        def ask_phone(p, approve, deny):
+            notify.send(settings,
+                        "אישור כניסה ל-NAS" if he else "NAS login request",
+                        (f"{p.client_name} מבקש גישה ל-MCP של ה-NAS. קוד: {p.match}" if he else
+                         f"{p.client_name} asks for access to the NAS MCP. Code: {p.match}"),
+                        actions=[{"title": "אשר" if he else "Approve", "uri": approve},
+                                 {"title": "דחה" if he else "Deny", "uri": deny}],
+                        tag=f"nasmcp-{p.id}")
+
+        provider = PhoneApprovalProvider(
+            Store(config.DATA_DIR / "oauth.json"), settings.public_url, settings.token,
+            notify=ask_phone, access_hours=settings.access_token_hours,
+            refresh_days=settings.refresh_token_days)
+    app, _ = build_app(nas, recorder, provider)
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("NASMCP_PORT", "8790")),
                 log_level="info", proxy_headers=True)
 

@@ -51,8 +51,20 @@ def _safe(fn):
     return wrapper
 
 
-def build_mcp(nas: NAS) -> MCPServer:
-    m = MCPServer("nas-mcp", title="Synology NAS", version=VERSION, instructions=INSTRUCTIONS)
+def build_mcp(nas: NAS, provider=None) -> MCPServer:
+    kw: dict[str, Any] = {}
+    if provider is not None:
+        from mcp.server.auth.settings import (AuthSettings, ClientRegistrationOptions,
+                                              RevocationOptions)
+        from .oauth import SCOPE
+        public = nas.s.public_url.rstrip("/")
+        kw = dict(auth_server_provider=provider, auth=AuthSettings(
+            issuer_url=public, resource_server_url=f"{public}/mcp",
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True, valid_scopes=[SCOPE], default_scopes=[SCOPE]),
+            revocation_options=RevocationOptions(enabled=True),
+            required_scopes=[SCOPE], validate_token_resource=False))
+    m = MCPServer("nas-mcp", title="Synology NAS", version=VERSION, instructions=INSTRUCTIONS, **kw)
     s = nas.s
 
     @m.tool(annotations=RO)
@@ -175,18 +187,22 @@ def _authorized(settings: Settings, request: Request) -> bool:
 
 
 class BearerGuard:
-    """Every path except /health needs `Authorization: Bearer <token>`.
+    """Without OAuth every path except /health needs `Authorization: Bearer <token>`.
+    With OAuth the SDK protects /mcp and only the status page is guarded here.
 
     The status page also accepts ?token=... once and remembers it in a cookie,
     so it can be opened from a phone browser.
     """
 
-    def __init__(self, app, settings: Settings):
+    def __init__(self, app, settings: Settings, oauth: bool = False):
         self.app = app
         self.settings = settings
+        self.oauth = oauth
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or scope["path"] == "/health":
+            return await self.app(scope, receive, send)
+        if self.oauth and scope["path"] != "/":
             return await self.app(scope, receive, send)
         request = Request(scope)
         ok = _authorized(self.settings, request)
@@ -201,8 +217,10 @@ class BearerGuard:
         return await self.app(scope, receive, send)
 
 
-def build_app(nas: NAS, recorder=None):
-    m = build_mcp(nas)
+def build_app(nas: NAS, recorder=None, provider=None):
+    m = build_mcp(nas, provider)
+    if provider is not None:
+        _oauth_routes(m, provider, nas.s.language)
 
     @m.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> Response:
@@ -222,7 +240,64 @@ def build_app(nas: NAS, recorder=None):
         host="0.0.0.0",
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
-    return BearerGuard(app, nas.s), m
+    return BearerGuard(app, nas.s, oauth=provider is not None), m
+
+
+# -- phone approval pages -------------------------------------------------------------
+
+OT = {
+    "en": {"wait_t": "Approve on your phone", "wait": "A notification was sent to your phone. "
+           "Tap Approve there if the code matches.", "code": "Code", "expired": "This request expired. "
+           "Start the connection again from Claude.", "denied": "Access denied.",
+           "approved": "Approved. You can return to Claude.", "notify_fail": "The notification could not be sent:"},
+    "he": {"wait_t": "אשר בטלפון", "wait": "נשלחה התראה לטלפון שלך. לחץ שם על 'אשר' אם הקוד זהה.",
+           "code": "קוד", "expired": "הבקשה פגה. התחל את החיבור מחדש מ-Claude.",
+           "denied": "הגישה נדחתה.", "approved": "אושר. אפשר לחזור ל-Claude.",
+           "notify_fail": "לא הצלחתי לשלוח את ההתראה:"},
+}
+
+
+def _page(lang: str, title: str, body: str, script: str = "") -> HTMLResponse:
+    rtl = "rtl" if lang == "he" else "ltr"
+    return HTMLResponse(
+        f"<!doctype html><html dir={rtl}><head><meta charset=utf-8>"
+        f"<meta name=viewport content='width=device-width,initial-scale=1'>"
+        f"<title>{html.escape(title)}</title><style>body{{font-family:system-ui,sans-serif;"
+        f"background:#111;color:#eee;margin:24px;font-size:20px;line-height:1.5}}"
+        f".code{{font-size:48px;letter-spacing:8px;font-weight:700;margin:16px 0}}</style></head>"
+        f"<body><h1>{html.escape(title)}</h1>{body}{script}</body></html>",
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+
+def _oauth_routes(m: MCPServer, provider, lang: str) -> None:
+    t = OT.get(lang, OT["en"])
+
+    @m.custom_route("/oauth/wait", methods=["GET"])
+    async def wait(request: Request) -> Response:
+        req = request.query_params.get("req", "")
+        st = provider.status(req) if req else {"state": "expired"}
+        if st["state"] != "waiting":
+            return _page(lang, t["expired"], "")
+        fail = (f"<p style='color:#ff8080'>{t['notify_fail']} {html.escape(st['notify_error'])}</p>"
+                if st.get("notify_error") else "")
+        script = ("<script>const q=new URLSearchParams(location.search).get('req');"
+                  "async function poll(){try{const r=await fetch('/oauth/status?req='+encodeURIComponent(q));"
+                  "const s=await r.json();if(s.redirect){location.replace(s.redirect);return}"
+                  "if(s.state==='expired'){location.reload();return}}catch(e){}setTimeout(poll,2000)}"
+                  "setTimeout(poll,2000)</script>")
+        return _page(lang, t["wait_t"], f"<p>{t['wait']}</p><p>{t['code']}:</p>"
+                     f"<div class=code>{st['match']}</div>{fail}", script)
+
+    @m.custom_route("/oauth/status", methods=["GET"])
+    async def status(request: Request) -> Response:
+        return JSONResponse(provider.status(request.query_params.get("req", "")),
+                            headers={"Cache-Control": "no-store"})
+
+    @m.custom_route("/oauth/decide/{req}/{secret}/{action}", methods=["GET"])
+    async def decide(request: Request) -> Response:
+        p = request.path_params
+        result = provider.decide(p["req"], p["secret"], p["action"])
+        return _page(lang, t.get(result, t["expired"]), "")
 
 
 def _page_data(nas: NAS, recorder) -> dict[str, Any]:

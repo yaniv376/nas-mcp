@@ -28,6 +28,14 @@ services:
       NASMCP_DSM_URL: ${NASMCP_DSM_URL:-}
       NASMCP_GATE_URL: ${NASMCP_GATE_URL:-}
       NASMCP_LANGUAGE: ${NASMCP_LANGUAGE:-en}
+      # Stage 1b: public address (Tailscale Funnel / Cloudflare) turns OAuth on;
+      # each new login is approved from a phone notification.
+      NASMCP_PUBLIC_URL: ${NASMCP_PUBLIC_URL:-}
+      NASMCP_NOTIFY_MODE: ${NASMCP_NOTIFY_MODE:-none}
+      NASMCP_HA_URL: ${NASMCP_HA_URL:-}
+      NASMCP_HA_TOKEN: ${NASMCP_HA_TOKEN:-}
+      NASMCP_HA_NOTIFY_SERVICE: ${NASMCP_HA_NOTIFY_SERVICE:-}
+      NASMCP_WEBHOOK_URL: ${NASMCP_WEBHOOK_URL:-}
       TZ: ${TZ:-UTC}
     networks: [nasmcp]
 

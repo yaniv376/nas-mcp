@@ -58,8 +58,21 @@ class Settings:
     gate_url: str = ""
     gate_token: str = ""
 
-    # MCP endpoint protection (stage 1a: static bearer token, LAN only)
+    # MCP endpoint protection. `token` is a static bearer token for the home
+    # network and the status page. With `public_url` set (the Funnel or tunnel
+    # address), OAuth is on: Claude registers itself and every new login waits
+    # for the owner to approve it from a phone notification.
     token: str = ""
+    public_url: str = ""
+    access_token_hours: int = 8
+    refresh_token_days: int = 90
+
+    # Notifications (OAuth approvals now, update alerts later)
+    notify_mode: str = "none"                  # ha | webhook | none
+    ha_url: str = ""
+    ha_token: str = ""
+    ha_notify_service: str = ""                # e.g. notify.mobile_app_myphone
+    webhook_url: str = ""
 
     folders: list[Folder] = field(default_factory=list)
     backups: list[BackupTarget] = field(default_factory=list)
@@ -86,6 +99,12 @@ _ENV = {
     "timezone": "NASMCP_TIMEZONE",
     "language": "NASMCP_LANGUAGE",
     "watchtower_container": "NASMCP_WATCHTOWER",
+    "public_url": "NASMCP_PUBLIC_URL",
+    "notify_mode": "NASMCP_NOTIFY_MODE",
+    "ha_url": "NASMCP_HA_URL",
+    "ha_token": "NASMCP_HA_TOKEN",
+    "ha_notify_service": "NASMCP_HA_NOTIFY_SERVICE",
+    "webhook_url": "NASMCP_WEBHOOK_URL",
 }
 
 DEFAULT_DOCKER_MOUNT = "/host/docker"
