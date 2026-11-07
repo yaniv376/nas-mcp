@@ -1,0 +1,46 @@
+# nas-mcp, stage 1a: read-only, home network only.
+# Put this file and a .env file next to each other in one folder, for example
+# /volume1/docker/nas-mcp, and create a Container Manager project from it.
+
+services:
+  nas-mcp:
+    image: ghcr.io/yaniv376/nas-mcp:latest
+    container_name: nas-mcp
+    restart: unless-stopped
+    # Run as your DSM user so it can read your folders and write ./data
+    # (1026:100 is the first DSM user and the "users" group on most NAS).
+    user: "${PUID:-1026}:${PGID:-100}"
+    depends_on: [docker-proxy]
+    ports:
+      - "8790:8790"
+    # ./data holds config.yaml (everything specific to this NAS) and the event log.
+    volumes:
+      - ./data:/data
+      # Folders the server may read. Access levels are set in data/config.yaml.
+      - /volume1/docker:/host/docker:ro
+    environment:
+      NASMCP_TOKEN: ${NASMCP_TOKEN}
+      NASMCP_DSM_USER: ${NASMCP_DSM_USER}
+      NASMCP_DSM_PASSWORD: ${NASMCP_DSM_PASSWORD}
+      NASMCP_GATE_TOKEN: ${NASMCP_GATE_TOKEN:-}
+      TZ: ${TZ:-UTC}
+    networks: [nasmcp]
+
+  # Read-only window into Docker: lists, inspects, logs and events only.
+  # POST is off, so nothing can be started, stopped or changed through it.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: nas-mcp-docker-proxy
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      EVENTS: 1
+      INFO: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [nasmcp]
+
+networks:
+  nasmcp: {}

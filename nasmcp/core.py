@@ -1,0 +1,224 @@
+"""The NAS facts and diagnoses that the MCP tools and the status page share."""
+
+from __future__ import annotations
+
+import time
+from typing import Any, Callable
+
+from . import files as filesmod
+from . import system as sysmod
+from . import watchtower as wtmod
+from .config import Settings
+from .diagnose import SEVERITY_ORDER, Finding, diagnose, summarize
+from .docker import DockerClient, DockerError
+from .dsm import DSMClient, DSMError
+from .events import EventLog
+from .gate import GateClient, GateError
+
+
+class NAS:
+    def __init__(self, settings: Settings, events: EventLog,
+                 dsm_factory: Callable[[], DSMClient] | None = None,
+                 docker: DockerClient | None = None, gate: GateClient | None = None):
+        self.s = settings
+        self.events = events
+        self.docker = docker or DockerClient(settings.docker_url)
+        self.gate = gate or GateClient(settings.gate_url, settings.gate_token)
+        self._dsm_factory = dsm_factory or (lambda: DSMClient(
+            settings.dsm_url, settings.dsm_user, settings.dsm_password, settings.dsm_verify_tls))
+        self._wt_cache: tuple[float, wtmod.WatchtowerReport] | None = None
+
+    # -- DSM ---------------------------------------------------------------------
+    def system(self) -> dict:
+        try:
+            with self._dsm_factory() as dsm:
+                return sysmod.system(dsm)
+        except DSMError as e:
+            return {"errors": [str(e)]}
+
+    def storage(self) -> dict:
+        try:
+            with self._dsm_factory() as dsm:
+                st = sysmod.storage(dsm)
+        except DSMError as e:
+            return {"errors": [str(e)]}
+        st["findings"] = sysmod.storage_findings(st)
+        return st
+
+    # -- containers ------------------------------------------------------------------
+    def containers(self) -> list[dict]:
+        out = []
+        for c in self.docker.containers():
+            labels = c.get("Labels") or {}
+            out.append({
+                "name": (c.get("Names") or ["?"])[0].lstrip("/"),
+                "image": c.get("Image"),
+                "state": c.get("State"),
+                "status": c.get("Status"),
+                "project": labels.get("com.docker.compose.project"),
+                "ports": sorted({f"{p.get('PublicPort')}->{p.get('PrivatePort')}/{p.get('Type')}"
+                                 for p in c.get("Ports") or [] if p.get("PublicPort")}),
+            })
+        return sorted(out, key=lambda x: (x["state"] == "running", x["name"]))
+
+    def _find(self, name: str) -> dict:
+        c = self.docker.find(name)
+        if not c:
+            names = ", ".join(x["name"] for x in self.containers())
+            raise DockerError(f"No single container matches '{name}'. Containers: {names}")
+        return c
+
+    def container(self, name: str) -> dict:
+        c = self._find(name)
+        insp = self.docker.inspect(c["Id"])
+        s = summarize(c, insp)
+        img = s["image"]
+        try:
+            im = self.docker.image(insp.get("Image", ""))
+            s["image_created"] = im.get("Created")
+            s["image_version_label"] = (im.get("Config") or {}).get("Labels", {}).get(
+                "org.opencontainers.image.version")
+        except DockerError:
+            pass
+        wt = self.watchtower_report()
+        upd = wt.last_update(s["name"]) if wt else None
+        s["last_watchtower_update"] = (
+            {"time": _fmt(upd.t), "image": upd.image, "new_image_id": upd.new_image_id}
+            if upd else None)
+        s["image_ref"] = img
+        return s
+
+    def logs(self, name: str, tail: int = 200, errors_only: bool = False) -> str:
+        c = self._find(name)
+        tail = max(1, min(int(tail), self.s.max_log_lines))
+        text = self.docker.logs(c["Id"], tail=tail)
+        if errors_only:
+            import re
+            rx = re.compile(r"error|critical|fatal|panic|denied|failed|exception|traceback", re.I)
+            text = "\n".join(ln for ln in text.splitlines() if rx.search(ln))
+        return filesmod.redact(text)
+
+    def watchtower_report(self, max_age: float = 120) -> wtmod.WatchtowerReport | None:
+        if self._wt_cache and time.time() - self._wt_cache[0] < max_age:
+            return self._wt_cache[1]
+        try:
+            c = self.docker.find(self.s.watchtower_container)
+            if not c:
+                return None
+            rep = wtmod.parse(self.docker.logs(c["Id"], tail=self.s.max_log_lines * 5))
+        except DockerError:
+            return None
+        self._wt_cache = (time.time(), rep)
+        return rep
+
+    def watchtower(self) -> dict:
+        rep = self.watchtower_report(max_age=0)
+        if rep is None:
+            return {"error": f"No Watchtower container matching '{self.s.watchtower_container}'"}
+        d = rep.as_dict()
+        for key in ("updates", "stops", "errors", "sessions"):
+            for item in d[key]:
+                item["time"] = _fmt(item.pop("t", None))
+        d["updates"] = d["updates"][-40:]
+        d["stops"] = d["stops"][-40:]
+        d["sessions_with_updates"] = [s for s in d.pop("sessions") if s.get("updated") not in ("0", None)]
+        return d
+
+    def diagnose(self, name: str | None = None, log_lines: int = 300) -> dict:
+        wt = self.watchtower_report()
+        targets = [self._find(name)] if name else self.docker.containers()
+        findings: list[Finding] = []
+        healthy: list[str] = []
+        for c in targets:
+            try:
+                insp = self.docker.inspect(c["Id"])
+                logs = self.docker.logs(c["Id"], tail=log_lines)
+            except DockerError as e:
+                findings.append(Finding((c.get("Names") or ["?"])[0].lstrip("/"), "medium",
+                                        "unreadable", "Could not read the container", str(e)))
+                continue
+            fs = diagnose(c, insp, logs, wt)
+            if any(f.severity in ("high", "medium") for f in fs) or name:
+                findings.extend(fs)
+            else:
+                healthy.append(summarize(c, insp)["name"])
+        findings.sort(key=lambda f: SEVERITY_ORDER.get(f.severity, 9))
+        return {
+            "checked": len(targets),
+            "problems": [f.as_dict() for f in findings if f.severity in ("high", "medium")],
+            "notes": [f.as_dict() for f in findings if f.severity in ("low", "info")][:40],
+            "healthy": sorted(healthy),
+            "watchtower_log_read": wt is not None,
+        }
+
+    def timeline(self, hours: int = 72, name: str | None = None) -> dict:
+        since = time.time() - hours * 3600
+        items = [dict(e, time=_fmt(e["t"])) for e in self.events.query(since, name)]
+        wt = self.watchtower_report()
+        if wt:
+            for u in wt.updates:
+                if u.t and u.t >= since and (not name or name.lower() in u.container.lower()):
+                    items.append({"t": u.t, "time": _fmt(u.t), "type": "watchtower",
+                                  "action": "update", "name": u.container, "image": u.image})
+        items.sort(key=lambda x: x.get("t") or 0)
+        for i in items:
+            i.pop("t", None)
+        first = self.events.first_time()
+        return {"since": _fmt(since), "events": items[-300:],
+                "recording_since": _fmt(first) if first else "not yet recording"}
+
+    # -- backups / gate / files ------------------------------------------------------------
+    def backups(self) -> list[dict]:
+        out = []
+        now = time.time()
+        for b in self.s.backups:
+            nf = filesmod.newest_file(b.path, b.pattern)
+            item: dict[str, Any] = {"name": b.name}
+            if not nf:
+                item.update(status="missing", detail="no backup file found")
+            else:
+                age_h = (now - nf["modified"]) / 3600
+                item.update(newest=nf["file"], size_mb=nf["size_mb"], time=_fmt(nf["modified"]),
+                            age_hours=round(age_h, 1),
+                            status="ok" if age_h <= b.max_age_hours else "late")
+            out.append(item)
+        return out
+
+    def security_scan(self) -> dict:
+        try:
+            return self.gate.scan()
+        except GateError as e:
+            return {"error": str(e)}
+
+    def gate_status(self) -> dict:
+        try:
+            st = self.gate.status()
+        except GateError as e:
+            return {"error": str(e)}
+        return {k: st.get(k) for k in ("is_open", "remaining_seconds", "protections", "scan", "version")}
+
+    def overview(self) -> dict:
+        """One call that answers 'how is the NAS?'"""
+        sysinfo = self.system()
+        st = self.storage()
+        try:
+            diag = self.diagnose()
+            containers = {"checked": diag["checked"], "problems": diag["problems"][:15],
+                           "healthy_count": len(diag["healthy"])}
+        except DockerError as e:
+            containers = {"error": str(e)}
+        scan = self.security_scan()
+        return {
+            "system": sysinfo,
+            "storage_findings": st.get("findings", []),
+            "volumes": st.get("volumes", []),
+            "containers": containers,
+            "backups": self.backups(),
+            "security_score": scan.get("score") if isinstance(scan, dict) else None,
+        }
+
+
+def _fmt(t: float | None) -> str:
+    if not t:
+        return ""
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(t))

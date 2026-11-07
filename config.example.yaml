@@ -1,0 +1,29 @@
+# Copy to data/config.yaml and adjust. Nothing in here is secret: passwords
+# and tokens go in the .env file next to docker-compose.yml.
+
+language: en                 # en | he (status page)
+timezone: UTC
+
+# Name (or part of it) of your Watchtower container, to read its update log.
+watchtower_container: watchtower
+
+# DSM Web API. 127.0.0.1 does not work from a bridge network: use the NAS LAN address.
+dsm_url: https://192.168.1.10:5001
+dsm_verify_tls: false
+
+# NAS gate (optional). Leave empty if you do not run it.
+gate_url: http://192.168.1.10:8787
+
+# Folders the server may read. `path` is where docker-compose.yml mounts them.
+# access: closed | read | write (write arrives in a later stage)
+folders:
+  - name: docker
+    path: /host/docker
+    access: read
+
+# Backup targets to watch (optional). Mount the folder read-only first.
+backups: []
+#  - name: Home Assistant
+#    path: /host/backups/homeassistant
+#    pattern: "*.tar"
+#    max_age_hours: 30
