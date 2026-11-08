@@ -217,3 +217,19 @@ def test_scrubbing_is_not_a_fault():
     he = localize({"severity": "info", "area": "disks and space",
                    "title": "Data scrubbing is running on reuse_2", "advice": ""})
     assert "רצה עכשיו" in he["title"]
+
+
+def test_backup_targets_reload_from_config(nas, tmp_path, monkeypatch):
+    from nasmcp import config
+    cfg = tmp_path / "config.yaml"
+    monkeypatch.setattr(config, "CONFIG_FILE", cfg)
+    folder = tmp_path / "agents"
+    folder.mkdir()
+    (folder / "a.enc").write_text("x")
+    cfg.write_text(f"backups:\n  - name: Agents\n    path: {folder}\n    pattern: '*.enc'\n    max_age_hours: 168\n")
+    names = [b["name"] for b in nas.backups()]
+    assert names == ["Agents"] and nas.backups()[0]["status"] == "ok"
+    cfg.write_text("backups: [")            # broken file: keep what was loaded
+    import os, time
+    os.utime(cfg, (time.time() + 5, time.time() + 5))
+    assert [b["name"] for b in nas.backups()] == ["Agents"]

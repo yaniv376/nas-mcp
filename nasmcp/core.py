@@ -175,7 +175,27 @@ class NAS:
                 "recording_since": _fmt(first) if first else "not yet recording"}
 
     # -- backups / gate / files ------------------------------------------------------------
+    def _reload_backup_targets(self) -> None:
+        """Pick up `backups:` from config.yaml when the file changes, so a new
+        target works without restarting the container."""
+        from . import config as cfgmod
+        try:
+            mtime = cfgmod.CONFIG_FILE.stat().st_mtime
+        except OSError:
+            return
+        if mtime == getattr(self, "_config_mtime", None):
+            return
+        self._config_mtime = mtime
+        try:
+            import yaml
+            raw = yaml.safe_load(cfgmod.CONFIG_FILE.read_text(encoding="utf-8")) or {}
+            if "backups" in raw:
+                self.s.backups = cfgmod._from_dict({"backups": raw["backups"] or []}).backups
+        except Exception:  # a broken file keeps the targets already loaded
+            pass
+
     def backups(self) -> list[dict]:
+        self._reload_backup_targets()
         out = []
         now = time.time()
         for b in self.s.backups:
