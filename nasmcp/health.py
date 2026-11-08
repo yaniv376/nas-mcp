@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from .dsm import DSMClient, DSMError
+from .i18n_he import localize
 
 PENALTY = {"high": 15, "medium": 6, "low": 2, "info": 0}
 
@@ -65,8 +66,10 @@ def scan(nas) -> dict[str, Any]:
     try:
         d = nas.diagnose()
         for p in d["problems"]:
-            findings.append(_f(p["severity"], "containers", f"{p['container']}: {p['title']}",
-                               p.get("suggestion") or ""))
+            f = _f(p["severity"], "containers", f"{p['container']}: {p['title']}",
+                   p.get("suggestion") or "")
+            f["code"], f["container"] = p.get("code", ""), p["container"]
+            findings.append(f)
     except Exception as e:  # noqa: BLE001
         findings.append(_f("info", "containers", f"Containers not checked: {e}"))
     # Broken updates waiting
@@ -75,6 +78,11 @@ def scan(nas) -> dict[str, Any]:
             if u["status"] == "broken":
                 findings.append(_f("high", "updates", f"{u['name']} broke after an update",
                                    "Use the rollback button in the alert, or ask Claude to roll back."))
+    if nas.s.language == "he":
+        findings = [localize(f, f.pop("code", ""), f.pop("container", "")) for f in findings]
+    else:
+        for f in findings:
+            f.pop("code", None), f.pop("container", None)
     score = max(0, 100 - sum(PENALTY.get(f["severity"], 0) for f in findings))
     order = {"high": 0, "medium": 1, "low": 2, "info": 3}
     findings.sort(key=lambda f: order.get(f["severity"], 9))

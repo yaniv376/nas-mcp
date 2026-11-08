@@ -17,6 +17,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from . import files as filesmod
+from . import maintenance as mtmod
 from .config import Settings
 from .core import NAS, Changes
 from . import writes as writesmod
@@ -29,9 +30,13 @@ VERSION = os.environ.get("NASMCP_VERSION", "dev")
 INSTRUCTIONS = """\
 Tools for a Synology NAS: system health, disks and volumes, Docker containers
 (state, logs, diagnosis), Watchtower update history, backups, the NAS gate's
-security scan, and read access to the folders the owner allowed.
+security scan, and access to the folders the owner allowed in the NAS gate
+(closed, read, or read and write).
 Start with nas_overview for "how is the NAS?", and container_diagnose when a
-container misbehaves. Everything in this version is read-only.
+container misbehaves. Reading is always allowed. Changes (containers, Compose
+files, files, storage maintenance) work only while the owner has the agent
+window open in the NAS gate; if it is closed, tell him to open it. Nothing is
+ever deleted: leftovers are renamed or moved to _to_delete.
 Answer the owner in plain language; he is not a network or Docker expert.
 """
 
@@ -157,7 +162,8 @@ def build_mcp(nas: NAS, provider=None) -> MCPServer:
     @m.tool(annotations=RO)
     @_safe
     def folders_list() -> list[dict]:
-        """Folders this server may read, with their access level."""
+        """Folders this server may use: access 'read' or 'write' (write also needs
+        the agent window). The owner sets them per shared folder in the NAS gate."""
         return filesmod.list_folders(s)
 
     @m.tool(annotations=RO)
@@ -247,6 +253,68 @@ def build_mcp(nas: NAS, provider=None) -> MCPServer:
         and the old file is backed up. Run project_run(project, 'build') afterwards
         to apply it."""
         return ch.compose_write(project, content)
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def file_write(folder: str, path: str, content: str, overwrite: bool = False) -> dict:
+        """Write a text file in a folder the owner set to read and write (see
+        folders_list). An existing file is replaced only with overwrite=true, and
+        its current copy is kept in .nas-mcp-history. Needs the agent window."""
+        return ch.file_write(folder, path, content, overwrite)
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def file_move(folder: str, src: str, dest: str, dest_folder: str = "") -> dict:
+        """Move or rename a file or folder (dest_folder: another read-and-write
+        folder, default the same one). Never overwrites. Needs the agent window."""
+        return ch.file_move(folder, src, dest, dest_folder)
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def file_retire(folder: str, path: str) -> dict:
+        """Instead of deleting: move a file or folder into the folder's _to_delete
+        subfolder, for the owner to delete later. Needs the agent window."""
+        return ch.file_retire(folder, path)
+
+    @m.tool(annotations=RO)
+    @_safe
+    def disk_smart_status(disk: str = "") -> list[dict]:
+        """S.M.A.R.T. self-test state per disk: running or not, time left, last
+        result and how long a quick or extended test takes. disk: 'Drive 2',
+        'sata4', or empty for all."""
+        with nas._dsm_factory() as dsm:
+            return mtmod.smart_status(dsm, disk)
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def disk_smart_test(disk: str, test: str = "quick") -> dict:
+        """Start a S.M.A.R.T. self-test on a disk: test = quick (about 2 minutes),
+        extended (hours; reads the whole surface) or stop. The disk keeps working.
+        Needs the agent window; no phone approval."""
+        return ch.smart_test(disk, test)
+
+    @m.tool(annotations=RO)
+    @_safe
+    def scrubbing_status() -> list[dict]:
+        """Data scrubbing state per storage pool (ready, manual_running,
+        schedule_running, paused, schedule_paused...)."""
+        with nas._dsm_factory() as dsm:
+            return mtmod.scrubbing_status(dsm)
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def scrubbing_start(pool: str) -> dict:
+        """Start data scrubbing now on a storage pool ('reuse_2' or its volume,
+        'volume1'). Checks the disks for silent errors; takes hours.
+        Needs the agent window; no phone approval."""
+        return ch.scrubbing_start(pool)
+
+    @m.tool(annotations=CHANGE)
+    @_safe
+    def scrubbing_schedule_resume() -> dict:
+        """Resume DSM's paused data scrubbing schedule (one schedule for all
+        pools). Needs the agent window; no phone approval."""
+        return ch.scrubbing_schedule_resume()
 
     @m.tool(annotations=RO)
     @_safe

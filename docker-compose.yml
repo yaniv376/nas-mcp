@@ -20,6 +20,10 @@ services:
       # The docker folder: ':rw' lets it edit Compose files (still only while the
       # gate's agent window is open); ':ro' keeps it read-only.
       - /volume1/docker:/host/docker:rw
+      # Shared folders: which ones are open (closed / read / read and write) is
+      # chosen in the NAS gate; nothing is reachable until you allow it there.
+      # - /volume1:/host/volume1:rw
+      # - /volume2:/host/volume2:rw
       # Optional, read-only: DSM's API definitions and UI, for looking things up.
       # - /usr/syno/synoman/webapi:/host/webapi:ro
       # - /usr/syno/synoman/webman:/host/webman:ro

@@ -14,6 +14,7 @@ from .docker import DockerClient, DockerError
 from .dsm import DSMClient, DSMError
 from .events import EventLog
 from .gate import GateClient, GateError
+from . import maintenance as mt
 from . import writes as w
 from pathlib import Path
 
@@ -294,6 +295,34 @@ class Changes:
         d = self._project_dir(project)
         return self._do("compose_restore", project, lambda: w.restore_compose(d, backup),
                         backup=backup)
+
+    def file_write(self, folder: str, path: str, content: str, overwrite: bool = False) -> dict:
+        return self._do("file_write", f"{folder}/{path}",
+                        lambda: filesmod.write_file(self.nas.s, folder, path, content, overwrite))
+
+    def file_move(self, folder: str, src: str, dest: str, dest_folder: str = "") -> dict:
+        return self._do("file_move", f"{folder}/{src}",
+                        lambda: filesmod.move(self.nas.s, folder, src, dest, dest_folder),
+                        to=f"{dest_folder or folder}/{dest}")
+
+    def file_retire(self, folder: str, path: str) -> dict:
+        return self._do("file_retire", f"{folder}/{path}",
+                        lambda: filesmod.retire(self.nas.s, folder, path))
+
+    def _dsm_do(self, action: str, target: str, fn):
+        def run():
+            with self.nas._dsm_factory() as dsm:
+                return fn(dsm)
+        return self._do(action, target, run)
+
+    def smart_test(self, disk: str, test: str) -> dict:
+        return self._dsm_do(f"smart_test_{test}", disk, lambda d: mt.smart_test(d, disk, test))
+
+    def scrubbing_start(self, pool: str) -> dict:
+        return self._dsm_do("scrubbing_start", pool, lambda d: mt.scrubbing_start(d, pool))
+
+    def scrubbing_schedule_resume(self) -> dict:
+        return self._dsm_do("scrubbing_schedule_resume", "all pools", mt.scrubbing_schedule_resume)
 
     def compose_backups(self, project: str) -> list[str]:
         return w.list_backups(self._project_dir(project))

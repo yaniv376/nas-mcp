@@ -73,11 +73,30 @@ never in this repository.
 | `container_retire` | stop, no auto-restart, rename `to_delete_<name>`; phone approval |
 | `compose_write` / `compose_restore` | edit a project's Compose file, validated, with backups |
 | `project_run` | Container Manager project stop / build / start / restart |
-| `projects_list`, `compose_backups`, `actions_log` | read-only helpers |
+| `file_write` / `file_move` / `file_retire` | write, move, or set aside files in read-and-write folders |
+| `disk_smart_test` | S.M.A.R.T. quick / extended test, or stop it |
+| `scrubbing_start` / `scrubbing_schedule_resume` | data scrubbing now, or resume DSM's paused schedule |
+| `projects_list`, `compose_backups`, `actions_log`, `disk_smart_status`, `scrubbing_status` | read-only helpers |
 
 Every change asks the gate first and fails closed, is logged to
 `data/actions.jsonl`, and never deletes anything. `nas-mcp`, its Docker proxy
 and `nas-gate` can never be stopped or retired from here.
+
+### Folders
+
+Which folders the server may use is the owner's choice in the NAS gate
+(per shared folder: closed, read, or read and write). Mount the volumes once so
+the allowed ones can be reached; everything not allowed stays closed in code:
+
+```yaml
+      - /volume1:/host/volume1:rw
+      - /volume2:/host/volume2:rw
+```
+
+An overwritten file is first copied to `.nas-mcp-history` in that folder;
+`file_retire` moves things to `_to_delete` instead of deleting. New files get
+the owner of their parent folder. If the gate cannot be reached, only the
+folders this server mounts itself (docker and the read-only DSM files) work.
 
 ## After every update (stage 1d)
 

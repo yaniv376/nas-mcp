@@ -98,8 +98,13 @@ class Settings:
         import hmac
         return hmac.new(self.token.encode(), b"nas-mcp/api/health", hashlib.sha256).hexdigest()[:40]
 
+    def all_folders(self) -> list[Folder]:
+        """Mounted folders merged with the owner's choices in the NAS gate."""
+        from .folders import effective
+        return effective(self)
+
     def folder(self, name: str) -> Folder | None:
-        for f in self.folders:
+        for f in self.all_folders():
             if f.name == name:
                 return f
         return None

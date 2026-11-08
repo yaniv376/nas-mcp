@@ -1,13 +1,16 @@
-"""File access limited to the folders listed in config.yaml.
+"""File access limited to the allowed folders (see folders.py).
 
 Every path is resolved (symlinks included) and must stay inside its folder.
-Stage 1a is read-only; writing arrives with the MCP window in stage 1c.
+Writes need a folder set to "write" and the agent window (checked by the
+caller). Nothing is ever deleted: an overwritten file is copied to
+.nas-mcp-history first, and "retire" moves things into the folder's _to_delete.
 """
 
 from __future__ import annotations
 
 import fnmatch
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -39,7 +42,7 @@ def _resolve(folder: Folder, rel: str) -> Path:
 def _folder(settings: Settings, name: str, need: str = "read") -> Folder:
     f = settings.folder(name)
     if not f:
-        names = ", ".join(x.name for x in settings.folders if x.access != "closed") or "none"
+        names = ", ".join(x.name for x in settings.all_folders() if x.access != "closed") or "none"
         raise AccessDenied(f"unknown folder '{name}'. Allowed: {names}")
     if f.access == "closed" or (need == "write" and f.access != "write"):
         raise AccessDenied(f"folder '{name}' is {f.access}")
@@ -48,7 +51,7 @@ def _folder(settings: Settings, name: str, need: str = "read") -> Folder:
 
 def list_folders(settings: Settings) -> list[dict[str, Any]]:
     return [{"name": f.name, "access": f.access, "exists": Path(f.path).is_dir()}
-            for f in settings.folders]
+            for f in settings.all_folders() if f.access != "closed"]
 
 
 def list_dir(settings: Settings, folder: str, path: str = "", max_entries: int = 500) -> dict:
@@ -183,3 +186,113 @@ def grep(settings: Settings, folder: str, pattern: str, path: str = "", glob: st
                 if len(hits) >= max_hits:
                     return {"hits": hits, "truncated": True, "files_scanned": files_scanned}
     return {"hits": hits, "truncated": False, "files_scanned": files_scanned}
+
+
+# -- writing (stage 1c-2) ----------------------------------------------------------
+
+HISTORY_DIR = ".nas-mcp-history"
+RETIRE_DIR = "_to_delete"
+MAX_WRITE_BYTES = 1_000_000
+
+
+def _rel(root: Path, p: Path) -> str:
+    return str(p.relative_to(root)) if p != root else ""
+
+
+def _match_owner(path: Path) -> None:
+    """Give a new file or folder the owner of its parent, so the NAS user who
+    owns the folder keeps full use of it (this server runs as root)."""
+    try:
+        st = path.parent.stat()
+        os.chown(path, st.st_uid, st.st_gid)
+    except OSError:
+        pass
+
+
+def _mkdirs(root: Path, d: Path) -> None:
+    missing = []
+    while d != root and not d.exists():
+        missing.append(d)
+        d = d.parent
+    for m in reversed(missing):
+        m.mkdir()
+        _match_owner(m)
+
+
+def _writable_target(settings: Settings, folder: str, path: str) -> tuple[Path, Path]:
+    f = _folder(settings, folder, "write")
+    root = Path(f.path).resolve()
+    target = _resolve(f, path)
+    if target == root:
+        raise AccessDenied("give a path inside the folder, not the folder itself")
+    if _blocked(target):
+        raise AccessDenied("that file holds secrets and is never touched")
+    if HISTORY_DIR in target.relative_to(root).parts:
+        raise AccessDenied(f"{HISTORY_DIR} keeps the backups and is not changed from here")
+    return root, target
+
+
+def _backup(root: Path, target: Path) -> str:
+    rel = target.relative_to(root)
+    dest = root / HISTORY_DIR / rel.parent / f"{rel.name}.{time.strftime('%Y%m%d-%H%M%S')}"
+    _mkdirs(root, dest.parent)
+    shutil.copy2(target, dest)
+    return _rel(root, dest)
+
+
+def write_file(settings: Settings, folder: str, path: str, content: str,
+               overwrite: bool = False) -> dict:
+    root, target = _writable_target(settings, folder, path)
+    data = content.encode("utf-8")
+    if len(data) > MAX_WRITE_BYTES:
+        raise AccessDenied(f"content is larger than {MAX_WRITE_BYTES} bytes")
+    if target.is_dir():
+        raise AccessDenied("that path is a folder")
+    backup = None
+    if target.exists():
+        if not overwrite:
+            raise AccessDenied("the file exists: pass overwrite=true to replace it "
+                               "(the current copy is kept in " + HISTORY_DIR + ")")
+        backup = _backup(root, target)
+    _mkdirs(root, target.parent)
+    is_new = not target.exists()
+    tmp = target.with_name(target.name + ".nas-mcp.tmp")
+    tmp.write_bytes(data)
+    if not is_new:
+        shutil.copymode(target, tmp)
+        st = target.stat()
+        try:
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except OSError:
+            pass
+    tmp.replace(target)
+    if is_new:
+        _match_owner(target)
+    return {"folder": folder, "path": _rel(root, target), "bytes": len(data), "backup": backup}
+
+
+def move(settings: Settings, folder: str, src: str, dest: str, dest_folder: str = "") -> dict:
+    root, s = _writable_target(settings, folder, src)
+    droot, d = _writable_target(settings, dest_folder or folder, dest)
+    if not s.exists():
+        raise AccessDenied(f"'{src}' does not exist")
+    if d.exists():
+        raise AccessDenied(f"'{dest}' already exists; nothing is overwritten by a move")
+    if s == d or s in d.parents:
+        raise AccessDenied("cannot move a folder into itself")
+    _mkdirs(droot, d.parent)
+    shutil.move(str(s), str(d))
+    return {"from": f"{folder}/{_rel(root, s)}", "to": f"{dest_folder or folder}/{_rel(droot, d)}"}
+
+
+def retire(settings: Settings, folder: str, path: str) -> dict:
+    """Move a file or folder into <folder>/_to_delete, keeping its relative path,
+    for the owner to delete later in one go."""
+    root, s = _writable_target(settings, folder, path)
+    rel = s.relative_to(root)
+    if rel.parts[0] == RETIRE_DIR:
+        raise AccessDenied(f"already in {RETIRE_DIR}")
+    dest = root / RETIRE_DIR / rel
+    if dest.exists():
+        dest = dest.with_name(f"{dest.name}.{time.strftime('%Y%m%d-%H%M%S')}")
+    return move(settings, folder, str(rel), _rel(root, dest))
