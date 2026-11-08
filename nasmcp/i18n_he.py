@@ -18,6 +18,7 @@ _TITLES: list[tuple[re.Pattern, str]] = [(re.compile(p), h) for p, h in [
     (r"^Volume (.+) is (\d+)% full$", "הווליום {0} מלא ב-{1}%"),
     (r"^Volume (.+) status: (.+)$", "הווליום {0}: מצב {1}"),
     (r"^Data scrubbing schedule is paused on (.+)$", "התזמון של בדיקת הנתונים (scrubbing) מושהה ב-{0}"),
+    (r"^Data scrubbing is running on (.+)$", "בדיקת נתונים (scrubbing) רצה עכשיו ב-{0}, תחזוקה רגילה ולא תקלה"),
     (r"^DSM update available ?(.*)$", "יש עדכון ל-DSM {0}"),
     (r"^Could not read storage: (.+)$", "לא הצלחתי לקרוא את נתוני האחסון: {0}"),
     (r"^DSM checks skipped: (.+)$", "בדיקות DSM דולגו: {0}"),

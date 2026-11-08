@@ -202,3 +202,18 @@ def test_grep(nas):
     assert "hunter2" not in str(r)
     with pytest.raises(files.AccessDenied):
         files.grep(nas.s, "private", "x")
+
+
+def test_scrubbing_is_not_a_fault():
+    from nasmcp.system import storage_findings
+    from nasmcp.i18n_he import localize
+    st = {"disks": [], "pools": [{"id": "reuse_2", "status": "background_scrubbing"},
+                                 {"id": "reuse_9", "status": "degraded"}],
+          "volumes": [{"path": "/volume1", "status": "background_scrubbing", "used_percent": 40}]}
+    f = storage_findings(st)
+    assert {"severity": "info", "title": "Data scrubbing is running on reuse_2"} in f
+    assert not [x for x in f if "/volume1" in x["title"]]
+    assert {"severity": "high", "title": "Storage pool reuse_9 status: degraded"} in f
+    he = localize({"severity": "info", "area": "disks and space",
+                   "title": "Data scrubbing is running on reuse_2", "advice": ""})
+    assert "רצה עכשיו" in he["title"]

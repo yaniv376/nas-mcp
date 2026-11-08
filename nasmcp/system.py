@@ -97,6 +97,14 @@ def storage(dsm: DSMClient) -> dict[str, Any]:
     return out
 
 
+_MAINTENANCE_STATES = ("scrubbing", "parity_check", "parity_consistency")
+
+
+def _is_maintenance(status: str) -> bool:
+    """Pool/volume states DSM shows during routine upkeep (e.g. background_scrubbing)."""
+    return any(k in status for k in _MAINTENANCE_STATES)
+
+
 def storage_findings(st: dict[str, Any]) -> list[dict[str, Any]]:
     """Plain problems worth telling the owner about."""
     out = []
@@ -114,7 +122,11 @@ def storage_findings(st: dict[str, Any]) -> list[dict[str, Any]]:
         if t is not None and t >= 55:
             out.append({"severity": "medium", "title": f"Disk {d['name']} is hot: {t:.0f}°C"})
     for p in st.get("pools", []):
-        if str(p.get("status") or "").lower() not in ("normal", ""):
+        ps = str(p.get("status") or "").lower()
+        if _is_maintenance(ps):
+            # Data scrubbing / parity check running: routine upkeep, not a fault.
+            out.append({"severity": "info", "title": f"Data scrubbing is running on {p['id']}"})
+        elif ps not in ("normal", ""):
             out.append({"severity": "high", "title": f"Storage pool {p['id']} status: {p['status']}"})
     for v in st.get("volumes", []):
         pct = v.get("used_percent")
@@ -122,6 +134,8 @@ def storage_findings(st: dict[str, Any]) -> list[dict[str, Any]]:
             out.append({"severity": "high", "title": f"Volume {v['path']} is {pct}% full"})
         elif pct is not None and pct >= 80:
             out.append({"severity": "medium", "title": f"Volume {v['path']} is {pct}% full"})
-        if str(v.get("status") or "").lower() not in ("normal", ""):
+        vs = str(v.get("status") or "").lower()
+        # A volume mirrors its pool while scrubbing; the pool line already says so.
+        if vs not in ("normal", "") and not _is_maintenance(vs):
             out.append({"severity": "high", "title": f"Volume {v['path']} status: {v['status']}"})
     return out
