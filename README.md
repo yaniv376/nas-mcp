@@ -76,6 +76,8 @@ never in this repository.
 | `file_write` / `file_move` / `file_retire` | write, move, or set aside files in read-and-write folders |
 | `disk_smart_test` | S.M.A.R.T. quick / extended test, or stop it |
 | `scrubbing_start` / `scrubbing_schedule_resume` | data scrubbing now, or resume DSM's paused schedule |
+| `firewall_add_rule` / `firewall_restore` | add one allow/deny rule at the top, or put back a saved profile; phone approval, profile saved first, deny rules can never cover LAN, Docker or Tailscale |
+| `firewall_rules`, `firewall_backups` | read-only helpers |
 | `projects_list`, `compose_backups`, `actions_log`, `disk_smart_status`, `scrubbing_status` | read-only helpers |
 
 Every change asks the gate first and fails closed, is logged to
