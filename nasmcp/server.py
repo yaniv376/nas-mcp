@@ -17,6 +17,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from . import files as filesmod
+from . import firewall as fwmod
 from . import maintenance as mtmod
 from .config import Settings
 from .core import NAS, Changes
@@ -34,7 +35,7 @@ security scan, and access to the folders the owner allowed in the NAS gate
 (closed, read, or read and write).
 Start with nas_overview for "how is the NAS?", and container_diagnose when a
 container misbehaves. Reading is always allowed. Changes (containers, Compose
-files, files, storage maintenance) work only while the owner has the agent
+files, files, storage maintenance, firewall rules) work only while the owner has the agent
 window open in the NAS gate; if it is closed, tell him to open it. Nothing is
 ever deleted: leftovers are renamed or moved to _to_delete.
 Answer the owner in plain language; he is not a network or Docker expert.
@@ -315,6 +316,42 @@ def build_mcp(nas: NAS, provider=None) -> MCPServer:
         """Resume DSM's paused data scrubbing schedule (one schedule for all
         pools). Needs the agent window; no phone approval."""
         return ch.scrubbing_schedule_resume()
+
+    @m.tool(annotations=RO)
+    @_safe
+    def firewall_rules() -> dict:
+        """DSM firewall: on or off, the active profile, and every rule in order
+        (first match wins) per network adapter, plus what happens when no rule
+        matches."""
+        with nas._dsm_factory() as dsm:
+            return fwmod.rules(dsm)
+
+    @m.tool(annotations=DISRUPTIVE)
+    @_safe
+    def firewall_add_rule(action: str, source: str, ports: str = "all",
+                          protocol: str = "all", name: str = "", adapter: str = "") -> dict:
+        """Add one DSM firewall rule at the top of the list (checked first).
+        action: allow | deny. source: 'all', an IPv4 address or a network like
+        192.168.4.0/24. ports: 'all' or e.g. '8191,8192' or '6000-6010'.
+        protocol: all | tcp | udp. adapter: default 'global' (all interfaces).
+        A deny rule that would cover the home network, Docker or Tailscale is
+        refused. The whole profile is saved first (firewall_backups), existing
+        rules are never changed or removed. Needs the agent window and a tap on
+        the owner's phone."""
+        return ch.firewall_add(action, source, ports, protocol, name, adapter)
+
+    @m.tool(annotations=RO)
+    @_safe
+    def firewall_backups() -> list[str]:
+        """Saved copies of the firewall profile, newest first (one before every change)."""
+        return ch.firewall_backups()
+
+    @m.tool(annotations=DISRUPTIVE)
+    @_safe
+    def firewall_restore(backup: str) -> dict:
+        """Put back a saved firewall profile from firewall_backups (the current one
+        is saved too). Needs the agent window and a tap on the owner's phone."""
+        return ch.firewall_restore(backup)
 
     @m.tool(annotations=RO)
     @_safe

@@ -82,6 +82,11 @@ class Settings:
     ha_token_entity: str = "input_text.nas_mcp_token"
     webhook_url: str = ""
 
+    # Networks a new firewall deny rule may never cover (home LAN, Docker,
+    # Tailscale): Home Assistant, backups and this server reach the NAS that way.
+    firewall_keep_open: list[str] = field(default_factory=lambda: [
+        "192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "100.64.0.0/10"])
+
     folders: list[Folder] = field(default_factory=list)
     backups: list[BackupTarget] = field(default_factory=list)
 

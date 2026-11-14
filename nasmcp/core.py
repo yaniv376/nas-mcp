@@ -14,6 +14,7 @@ from .docker import DockerClient, DockerError
 from .dsm import DSMClient, DSMError
 from .events import EventLog
 from .gate import GateClient, GateError
+from . import firewall as fw
 from . import maintenance as mt
 from . import writes as w
 from pathlib import Path
@@ -343,6 +344,33 @@ class Changes:
 
     def scrubbing_schedule_resume(self) -> dict:
         return self._dsm_do("scrubbing_schedule_resume", "all pools", mt.scrubbing_schedule_resume)
+
+    def _data_dir(self) -> Path:
+        return self.nas.audit.path.parent
+
+    def firewall_add(self, action: str, source: str, ports: str, protocol: str,
+                     name: str, adapter: str) -> dict:
+        self._guard()
+        with self.nas._dsm_factory() as dsm:
+            plan = fw.plan_add(dsm, action, source, ports, protocol, name, adapter,
+                               self.nas.s.firewall_keep_open)
+        d = fw.describe(plan["rule"])
+        self.nas.approvals.ask(f"Firewall: add rule {d['action']} from {d['source']}, "
+                               f"ports {d['ports']} ({d['protocol']}) at the top")
+        def run(dsm):
+            return fw.add_rule(dsm, plan, self._data_dir())
+        return self._dsm_do("firewall_add", f"{d['action']} {d['source']} {d['ports']}", run)
+
+    def firewall_restore(self, backup: str) -> dict:
+        self._guard()
+        if backup not in fw.list_backups(self._data_dir()):
+            raise ValueError(f"no firewall backup named {backup} (see firewall_backups)")
+        self.nas.approvals.ask(f"Firewall: put back the rules saved in {backup}")
+        return self._dsm_do("firewall_restore", backup,
+                            lambda dsm: fw.restore(dsm, self._data_dir(), backup))
+
+    def firewall_backups(self) -> list[str]:
+        return fw.list_backups(self._data_dir())
 
     def compose_backups(self, project: str) -> list[str]:
         return w.list_backups(self._project_dir(project))
